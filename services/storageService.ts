@@ -7,7 +7,7 @@ const BUCKET_URL = 'https://kvdb.io/Mo7Xz5P6eE6zVqY1HqNqfU';
 const MANIFEST_KEY = 'musijnet_manifest_v3';
 
 // Helper for fetch with timeout
-const fetchWithTimeout = async (url: string, options: any = {}, timeout = 15000) => {
+const fetchWithTimeout = async (url: string, options: any = {}, timeout = 45000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
@@ -69,22 +69,23 @@ export const storageService = {
     }
   },
 
-  saveAudioBlob: async (trackId: string, audioData: string): Promise<void> => {
+  // Save audio as raw Binary Blob to stay under 1MB limit without Base64 overhead
+  saveAudioBlob: async (trackId: string, audioBlob: Blob): Promise<void> => {
     try {
       const response = await fetchWithTimeout(`${BUCKET_URL}/audio_${trackId}`, {
         method: 'PUT',
         mode: 'cors',
-        headers: { 'Content-Type': 'text/plain' },
-        body: audioData,
-      }, 30000); // 30s for audio upload
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: audioBlob,
+      }, 60000); // 60s for binary upload
       
       if (!response.ok) {
-        if (response.status === 413) throw new Error('Файл превышает лимит сервера (1МБ)');
+        if (response.status === 413) throw new Error('Файл слишком велик (лимит сервера 1МБ)');
         throw new Error(`Ошибка сервера: ${response.status}`);
       }
     } catch (err: any) {
-      if (err.name === 'AbortError') throw new Error("Время ожидания истекло. Файл слишком большой?");
-      if (err instanceof TypeError) throw new Error("Ошибка сети: проверьте подключение или размер файла (лимит 1МБ).");
+      if (err.name === 'AbortError') throw new Error("Таймаут загрузки. Файл слишком большой для текущей скорости сети.");
+      if (err instanceof TypeError) throw new Error("Сетевая ошибка: сервис заблокировал запрос (возможно, превышен лимит 1МБ).");
       throw err;
     }
   },
@@ -96,7 +97,15 @@ export const storageService = {
       cache: 'no-store'
     });
     if (!response.ok) throw new Error('Аудио не найдено на сервере');
-    return await response.text();
+    
+    // Get binary data and convert back to base64 for the Audio element
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
   },
 
   getUsers: (): User[] => {
@@ -125,10 +134,10 @@ export const storageService = {
     return remote.tracks;
   },
 
-  saveTrack: async (track: Track): Promise<void> => {
-    // 1. Save audio first
-    await storageService.saveAudioBlob(track.id, track.audioFile);
-    // 2. Then save to manifest
+  saveTrack: async (track: Track, audioBlob: Blob): Promise<void> => {
+    // 1. Save binary audio first
+    await storageService.saveAudioBlob(track.id, audioBlob);
+    // 2. Then save metadata to manifest
     const remote = await storageService.getRemoteManifest();
     remote.tracks.push(track);
     await storageService.saveRemoteManifest(remote);

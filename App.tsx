@@ -37,9 +37,18 @@ const formatTime = (seconds: number) => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-// KVDB limit is strict. 1MB for base64 means raw file must be < 750KB. 
-// But we'll try to push it to ~800KB.
-const MAX_RAW_FILE_SIZE = 800 * 1024; 
+// For binary upload, we can use almost 1MB.
+const MAX_BINARY_SIZE = 980 * 1024; 
+
+const dataURLtoBlob = (dataurl: string) => {
+  const arr = dataurl.split(',');
+  const mime = arr[0].match(/:(.*?);/)?.[1];
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new Blob([u8arr], { type: mime });
+};
 
 const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthState>(() => storageService.getAuth());
@@ -66,6 +75,7 @@ const App: React.FC = () => {
   const [isExplicit, setIsExplicit] = useState(false);
   const [trackCover, setTrackCover] = useState<string | null>(null);
   const [trackAudio, setTrackAudio] = useState<string | null>(null);
+  const [trackAudioSize, setTrackAudioSize] = useState<number>(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStep, setUploadStep] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -254,9 +264,11 @@ const App: React.FC = () => {
     
     setIsUploading(true);
     setUploadError(null);
-    setUploadStep('Шифрование аудио...');
+    setUploadStep('Подготовка бинарного пакета...');
 
     const trackId = Math.random().toString(36).substr(2, 9);
+    const audioBlob = dataURLtoBlob(trackAudio);
+
     const newTrack: Track = {
       id: trackId,
       title: uploadTitle,
@@ -264,7 +276,7 @@ const App: React.FC = () => {
       artistName: auth.user.username,
       artistAvatar: auth.user.avatar,
       coverImage: trackCover,
-      audioFile: trackAudio,
+      audioFile: '', // We don't store it here, it goes to blob storage
       isExplicit: isExplicit,
       releaseType: uploadReleaseType,
       status: 'pending',
@@ -272,17 +284,18 @@ const App: React.FC = () => {
     };
 
     try {
-      setUploadStep('Загрузка аудио-блока на сервер...');
-      await storageService.saveTrack(newTrack);
-      setUploadStep('Синхронизация манифеста...');
+      setUploadStep('Передача аудио-блока (Binary)...');
+      await storageService.saveTrack(newTrack, audioBlob);
+      setUploadStep('Синхронизация реестра...');
       await syncData(true); 
       setView('profile');
       setUploadTitle('');
       setTrackCover(null);
       setTrackAudio(null);
       setIsExplicit(false);
+      setTrackAudioSize(0);
     } catch (err: any) {
-      setUploadError(err.message || "Сетевая ошибка при загрузке. Проверьте размер файла.");
+      setUploadError(err.message || "Ошибка загрузки. Проверьте размер файла.");
     } finally {
       setIsUploading(false);
       setUploadStep('');
@@ -467,15 +480,20 @@ const App: React.FC = () => {
                       <Music className="w-8 h-8 opacity-30" /> 
                       <div className="flex flex-col gap-1">
                         <span>{trackAudio ? "Аудио выбрано ✓" : t.selectFile}</span>
-                        {!trackAudio && <span className="text-[8px] opacity-40 font-medium">MP3 рекомендуемо (Лимит 800KB)</span>}
+                        {trackAudioSize > 0 && (
+                          <span className={`text-[10px] font-bold ${trackAudioSize > MAX_BINARY_SIZE ? 'text-red-600' : 'text-green-600 opacity-60'}`}>
+                            Размер: {(trackAudioSize/1024).toFixed(1)} КБ {trackAudioSize > MAX_BINARY_SIZE ? '(Слишком велик!)' : ''}
+                          </span>
+                        )}
+                        {!trackAudio && <span className="text-[8px] opacity-40 font-medium">Рекомендуется до 950 КБ</span>}
                       </div>
                    </div>
                    <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={e => {
                      const f = e.target.files?.[0];
                      if (f) { 
-                       if (f.size > MAX_RAW_FILE_SIZE) {
-                         alert(`Файл слишком большой (${(f.size/1024).toFixed(0)}KB). Лимит хранилища - 800KB.`);
-                         return;
+                       setTrackAudioSize(f.size);
+                       if (f.size > MAX_BINARY_SIZE) {
+                         alert(`Файл слишком большой (${(f.size/1024).toFixed(0)} КБ). Лимит хранилища - 980 КБ. Пожалуйста, сожмите аудио.`);
                        }
                        const r = new FileReader(); 
                        r.onloadend = () => setTrackAudio(r.result as string); 
@@ -487,7 +505,7 @@ const App: React.FC = () => {
                       <input type="checkbox" id="explicit-check" checked={isExplicit} onChange={e => setIsExplicit(e.target.checked)} className="accent-red-600 w-5 h-5 cursor-pointer" />
                       <label htmlFor="explicit-check" className="font-black uppercase text-[10px] italic cursor-pointer flex-1">{t.explicit}</label>
                    </div>
-                   <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-20 flex flex-col items-center gap-2">
+                   <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle || trackAudioSize > MAX_BINARY_SIZE} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-20 flex flex-col items-center gap-2">
                       {isUploading ? (
                         <>
                           <Loader2 className="animate-spin w-8 h-8" />
@@ -530,7 +548,6 @@ const App: React.FC = () => {
              </div>
           </div>
         )}
-        {/* Settings view omitted for brevity, logic remains same */}
       </main>
 
       {nowPlaying && (
