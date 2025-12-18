@@ -1,28 +1,25 @@
 
-import { User, Track, AuthState, Playlist } from '../types';
+import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
 const USERS_KEY = 'musijnet_local_users';
-// This bucket ID is unique to Musijnet global synchronization
-const CLOUD_STORAGE_URL = 'https://kvdb.io/Mo7Xz5P6eE6zVqY1HqNqfU/musijnet_global_v2';
+const BUCKET_URL = 'https://kvdb.io/Mo7Xz5P6eE6zVqY1HqNqfU';
+const MANIFEST_KEY = 'musijnet_manifest_v3';
 
 export const storageService = {
-  isServerConnected: (): boolean => {
-    return true; 
-  },
-
-  // Remote Fetching Logic
-  getRemoteData: async (): Promise<{ tracks: Track[], users: User[] }> => {
+  // Remote Fetching with robust options
+  getRemoteManifest: async (): Promise<{ tracks: Track[], users: User[] }> => {
     try {
-      const response = await fetch(CLOUD_STORAGE_URL);
-      if (response.status === 404) {
-        return { tracks: [], users: [] }; // Initial state
-      }
-      if (!response.ok) throw new Error('Cloud offline or rejected request');
+      const response = await fetch(`${BUCKET_URL}/${MANIFEST_KEY}`, {
+        mode: 'cors',
+        credentials: 'omit'
+      });
+      if (response.status === 404) return { tracks: [], users: [] };
+      if (!response.ok) throw new Error('Cloud manifest offline');
       const text = await response.text();
       return text ? JSON.parse(text) : { tracks: [], users: [] };
     } catch (e) {
-      console.warn("Cloud sync failed, falling back to local simulation", e);
+      console.warn("Manifest sync failed, using local fallback", e);
       const localTracks = localStorage.getItem('musijnet_fallback_tracks');
       const localUsers = localStorage.getItem('musijnet_fallback_users');
       return {
@@ -32,31 +29,57 @@ export const storageService = {
     }
   },
 
-  saveRemoteData: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
+  saveRemoteManifest: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
+    const cleanTracks = data.tracks.map(t => ({ 
+      ...t, 
+      audioFile: '', // Never store audio in manifest
+      // Keep cover image but maybe check size?
+    }));
+    
     try {
-      // KVDB requires PUT to update/set the value of a key
-      const response = await fetch(CLOUD_STORAGE_URL, {
+      const response = await fetch(`${BUCKET_URL}/${MANIFEST_KEY}`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(data),
+        mode: 'cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tracks: cleanTracks, users: data.users }),
       });
-
-      if (!response.ok) {
-        if (response.status === 413) {
-          throw new Error('Файл слишком велик для сервера (лимит KVDB)');
-        }
-        throw new Error(`Server error: ${response.status}`);
-      }
-
-      // Save backup locally
-      localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(data.tracks));
+      if (!response.ok) throw new Error(`Manifest save error: ${response.status}`);
+      
+      localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(cleanTracks));
       localStorage.setItem('musijnet_fallback_users', JSON.stringify(data.users));
-    } catch (e) {
-      console.error("Critical: Failed to push to Cloud Node", e);
-      throw e; // Rethrow to handle in UI
+    } catch (err) {
+      console.error("Failed to save manifest", err);
+      throw new Error("Ошибка синхронизации списка песен.");
     }
+  },
+
+  saveAudioBlob: async (trackId: string, audioData: string): Promise<void> => {
+    try {
+      const response = await fetch(`${BUCKET_URL}/audio_${trackId}`, {
+        method: 'PUT',
+        mode: 'cors',
+        headers: { 'Content-Type': 'text/plain' }, // Send as plain text for max compatibility
+        body: audioData,
+      });
+      
+      if (!response.ok) {
+        if (response.status === 413) throw new Error('Файл слишком велик для облака (лимит 1.5MB)');
+        throw new Error(`Ошибка сервера: ${response.status}`);
+      }
+    } catch (err) {
+      if (err instanceof TypeError && err.message === 'Failed to fetch') {
+        throw new Error("Ошибка сети: файл слишком велик или сервер недоступен.");
+      }
+      throw err;
+    }
+  },
+
+  getAudioBlob: async (trackId: string): Promise<string> => {
+    const response = await fetch(`${BUCKET_URL}/audio_${trackId}`, {
+      mode: 'cors'
+    });
+    if (!response.ok) throw new Error('Аудио не найдено на сервере');
+    return await response.text();
   },
 
   getUsers: (): User[] => {
@@ -65,10 +88,10 @@ export const storageService = {
   },
 
   saveUser: async (user: User) => {
-    const remote = await storageService.getRemoteData();
-    if (!remote.users.find(u => u.username.toLowerCase() === user.username.toLowerCase())) {
+    const remote = await storageService.getRemoteManifest();
+    if (!remote.users.find(u => u.id === user.id)) {
       remote.users.push(user);
-      await storageService.saveRemoteData(remote);
+      await storageService.saveRemoteManifest(remote);
     }
     const localUsers = storageService.getUsers();
     localUsers.push(user);
@@ -76,34 +99,37 @@ export const storageService = {
   },
 
   getTracks: async (): Promise<Track[]> => {
-    const remote = await storageService.getRemoteData();
+    const remote = await storageService.getRemoteManifest();
     return remote.tracks;
   },
 
   saveTrack: async (track: Track): Promise<void> => {
-    const remote = await storageService.getRemoteData();
+    // 1. Save audio first (the heavy part)
+    await storageService.saveAudioBlob(track.id, track.audioFile);
+    // 2. Then save metadata to manifest
+    const remote = await storageService.getRemoteManifest();
     remote.tracks.push(track);
-    await storageService.saveRemoteData(remote);
+    await storageService.saveRemoteManifest(remote);
   },
 
   deleteTrack: async (trackId: string): Promise<void> => {
-    const remote = await storageService.getRemoteData();
+    const remote = await storageService.getRemoteManifest();
     remote.tracks = remote.tracks.filter(t => t.id !== trackId);
-    await storageService.saveRemoteData(remote);
+    await storageService.saveRemoteManifest(remote);
   },
 
   updateTrackStatus: async (trackId: string, status: Track['status']): Promise<Track[]> => {
-    const remote = await storageService.getRemoteData();
+    const remote = await storageService.getRemoteManifest();
     const track = remote.tracks.find(t => t.id === trackId);
     if (track) {
       track.status = status;
-      await storageService.saveRemoteData(remote);
+      await storageService.saveRemoteManifest(remote);
     }
     return remote.tracks;
   },
 
   toggleSavedTrack: async (userId: string, trackId: string) => {
-    const remote = await storageService.getRemoteData();
+    const remote = await storageService.getRemoteManifest();
     const userIndex = remote.users.findIndex(u => u.id === userId);
     if (userIndex !== -1) {
       const user = remote.users[userIndex];
@@ -111,7 +137,7 @@ export const storageService = {
       const trackIndex = user.savedTrackIds.indexOf(trackId);
       if (trackIndex === -1) user.savedTrackIds.push(trackId);
       else user.savedTrackIds.splice(trackIndex, 1);
-      await storageService.saveRemoteData(remote);
+      await storageService.saveRemoteManifest(remote);
       
       const auth = storageService.getAuth();
       if (auth.user?.id === userId) {
