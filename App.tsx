@@ -4,7 +4,6 @@ import { User, Track, AuthState, AppTheme, AppLanguage, Playlist, ReleaseType } 
 import { storageService } from './services/storageService';
 import { Logo, APP_NAME } from './constants';
 import { translations } from './translations';
-// Corrected import to include Type from @google/genai
 import { GoogleGenAI, Type } from "@google/genai";
 import { 
   Upload, 
@@ -43,7 +42,8 @@ import {
   Wifi,
   WifiOff,
   Database,
-  RefreshCw
+  RefreshCw,
+  LayoutDashboard
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
@@ -60,7 +60,7 @@ const App: React.FC = () => {
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
   const [allUsers, setAllUsers] = useState<User[]>(storageService.getUsers());
   const [isLoadingTracks, setIsLoadingTracks] = useState(true);
-  const [view, setView] = useState<'home' | 'upload' | 'admin' | 'profile' | 'settings' | 'playlist' | 'library' | 'moderators'>('home');
+  const [view, setView] = useState<'home' | 'upload' | 'admin' | 'profile' | 'settings' | 'playlist' | 'library' | 'moderation'>('home');
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   
@@ -94,13 +94,11 @@ const App: React.FC = () => {
   const [globalTracks, setGlobalTracks] = useState<Track[]>([]);
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
 
-  // Automatic connection on start
   useEffect(() => {
     const loadData = async () => {
       setIsLoadingTracks(true);
       const storedTracks = await storageService.getTracks();
       setTracks(storedTracks);
-      // Simulate fetching users/state from server
       setAllUsers(storageService.getUsers());
       setIsLoadingTracks(false);
     };
@@ -112,7 +110,6 @@ const App: React.FC = () => {
     setIsFetchingGlobal(true);
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      // Using responseMimeType and responseSchema for structured data extraction
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
         contents: 'Generate a list of 5 trending futuristic professional musician names and track titles for a centralized music platform.',
@@ -133,7 +130,6 @@ const App: React.FC = () => {
           }
         }
       });
-      // Corrected extracting text from response
       const textOutput = response.text || '[]';
       const data = JSON.parse(textOutput);
       const mocked: Track[] = data.map((d: any, i: number) => ({
@@ -219,7 +215,6 @@ const App: React.FC = () => {
       if (authMode === 'login') {
         let user = users.find(u => u.username.toLowerCase() === normalizedUsername);
         if (user) {
-          // Force developer status for ELETRO on login
           if (isEletro) {
             user.isDeveloper = true;
             user.isAdmin = true;
@@ -235,7 +230,7 @@ const App: React.FC = () => {
           username: loginUsername,
           avatar: tempAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${loginUsername}`,
           isAdmin: isEletro || loginUsername.toLowerCase().includes('admin'),
-          isDeveloper: isEletro, // Set ELETRO as Developer
+          isDeveloper: isEletro,
           savedTrackIds: [],
           savedArtistIds: []
         };
@@ -268,18 +263,37 @@ const App: React.FC = () => {
     setTracks(await storageService.getTracks());
     setView('profile');
     setIsUploading(false);
+    // Reset form
+    setUploadTitle('');
+    setTrackCover(null);
+    setTrackAudio(null);
+    setIsExplicit(false);
+  };
+
+  const handleStatusUpdate = async (trackId: string, status: Track['status']) => {
+    const updatedTracks = await storageService.updateTrackStatus(trackId, status);
+    setTracks(updatedTracks);
   };
 
   const filteredTracks = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
     let base = tracks;
-    if (view === 'home') base = tracks.filter(t => t.status === 'approved');
-    else if (view === 'profile') base = tracks.filter(t => t.artistId === auth.user?.id);
-    else if (view === 'library') base = tracks.filter(t => auth.user?.savedTrackIds?.includes(t.id));
+    
+    if (view === 'home') {
+      base = tracks.filter(t => t.status === 'approved');
+    } else if (view === 'profile') {
+      base = tracks.filter(t => t.artistId === auth.user?.id);
+    } else if (view === 'library') {
+      base = tracks.filter(t => auth.user?.savedTrackIds?.includes(t.id));
+    } else if (view === 'moderation') {
+      base = tracks.filter(t => t.status === 'pending');
+    }
     
     if (q) return base.filter(t => t.title.toLowerCase().includes(q) || t.artistName.toLowerCase().includes(q));
     return base;
   }, [tracks, view, searchQuery, auth.user]);
+
+  const canModerate = auth.user?.isAdmin || auth.user?.isDeveloper;
 
   return (
     <div className="flex flex-col min-h-screen pb-32">
@@ -299,32 +313,37 @@ const App: React.FC = () => {
           </div>
 
           <nav className="hidden md:flex items-center gap-6">
-            <button onClick={() => setView('home')} className={`text-[10px] font-black uppercase italic ${view === 'home' ? 'text-white' : 'text-white/60'}`}>{t.home}</button>
+            <button onClick={() => setView('home')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'home' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.home}</button>
             {auth.isAuthenticated && (
               <>
-                <button onClick={() => setView('library')} className={`text-[10px] font-black uppercase italic ${view === 'library' ? 'text-white' : 'text-white/60'}`}>{t.library}</button>
-                <button onClick={() => setView('profile')} className={`text-[10px] font-black uppercase italic ${view === 'profile' ? 'text-white' : 'text-white/60'}`}>{t.stage}</button>
+                <button onClick={() => setView('library')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'library' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.library}</button>
+                <button onClick={() => setView('profile')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'profile' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.stage}</button>
+                {canModerate && (
+                  <button onClick={() => setView('moderation')} className={`text-[10px] font-black uppercase italic transition-opacity flex items-center gap-1.5 ${view === 'moderation' ? 'text-yellow-300' : 'opacity-60 hover:opacity-100'}`}>
+                    <ShieldCheck className="w-3 h-3" /> {t.moderation}
+                  </button>
+                )}
               </>
             )}
-            <button onClick={() => setView('settings')} className={`text-[10px] font-black uppercase italic ${view === 'settings' ? 'text-white' : 'text-white/60'}`}>{t.settings}</button>
+            <button onClick={() => setView('settings')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'settings' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.settings}</button>
           </nav>
 
           <div className="flex items-center gap-4">
             {auth.isAuthenticated ? (
               <div className="flex items-center gap-3">
                 <button onClick={() => setView('upload')} className="bg-white text-red-600 px-4 py-1.5 rounded-full font-black text-[9px] uppercase shadow-lg hover:scale-105 transition-transform">{t.upload}</button>
-                <div className="relative">
-                  <img src={auth.user?.avatar} className="w-9 h-9 rounded-full border-2 border-white/50 cursor-pointer shadow-lg" onClick={() => setView('profile')} />
+                <div className="relative group">
+                  <img src={auth.user?.avatar} className="w-9 h-9 rounded-full border-2 border-white/50 cursor-pointer shadow-lg group-hover:border-white transition-all" onClick={() => setView('profile')} />
                   {auth.user?.isDeveloper && (
                     <div className="absolute -top-1 -right-1 bg-yellow-400 p-0.5 rounded-full shadow-lg border border-red-600">
                       <Sparkles className="w-2 h-2 text-red-600 fill-red-600" />
                     </div>
                   )}
                 </div>
-                <button onClick={() => { storageService.logout(); window.location.reload(); }}><LogOut className="w-5 h-5 opacity-60 hover:opacity-100" /></button>
+                <button onClick={() => { storageService.logout(); window.location.reload(); }} className="p-2 hover:bg-white/10 rounded-full transition-colors"><LogOut className="w-5 h-5 opacity-60 hover:opacity-100" /></button>
               </div>
             ) : (
-              <button onClick={() => setIsLoginModalOpen(true)} className="bg-white text-red-600 px-6 py-2 rounded-full font-black text-[10px] uppercase shadow-lg">{t.login}</button>
+              <button onClick={() => setIsLoginModalOpen(true)} className="bg-white text-red-600 px-6 py-2 rounded-full font-black text-[10px] uppercase shadow-lg hover:bg-red-50 transition-colors">{t.login}</button>
             )}
           </div>
         </div>
@@ -347,7 +366,7 @@ const App: React.FC = () => {
                     <Globe className="w-10 h-10" /> {t.globalDiscovery}
                  </h3>
                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
-                    {isFetchingGlobal ? <Loader2 className="animate-spin" /> : globalTracks.map(track => (
+                    {isFetchingGlobal ? <Loader2 className="animate-spin text-red-600 mx-auto" /> : globalTracks.map(track => (
                       <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} />
                     ))}
                  </div>
@@ -357,15 +376,47 @@ const App: React.FC = () => {
                  <h3 className="text-4xl font-black uppercase italic mb-8 flex items-center gap-4 text-red-600">
                     <Database className="w-10 h-10" /> {t.topCharts}
                  </h3>
-                 {filteredTracks.length === 0 ? <p className="opacity-30 italic">{t.noTracks}</p> : (
-                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-                      {filteredTracks.map(track => (
-                        <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} />
-                      ))}
-                   </div>
+                 {isLoadingTracks ? <Loader2 className="animate-spin text-red-600 mx-auto" /> : (
+                   filteredTracks.length === 0 ? <p className="opacity-30 italic">{t.noTracks}</p> : (
+                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+                        {filteredTracks.map(track => (
+                          <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} />
+                        ))}
+                     </div>
+                   )
                  )}
               </div>
             </div>
+          </div>
+        )}
+
+        {view === 'moderation' && (
+          <div className="space-y-12">
+            <div className="flex items-center justify-between">
+              <h2 className="text-6xl font-black uppercase italic tracking-tighter text-red-600">{t.modRoom}</h2>
+              <div className="bg-yellow-500/10 border-2 border-yellow-500/20 px-6 py-3 rounded-2xl flex items-center gap-3">
+                <ShieldCheck className="w-6 h-6 text-yellow-600" />
+                <span className="text-xs font-black uppercase">{filteredTracks.length} {t.pending}</span>
+              </div>
+            </div>
+            {filteredTracks.length === 0 ? (
+              <div className="app-card p-20 rounded-[60px] text-center opacity-40">
+                <CheckCircle className="w-20 h-20 mx-auto mb-6 opacity-20" />
+                <p className="text-2xl font-black uppercase italic">{t.cleanDesk}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+                {filteredTracks.map(track => (
+                  <TrackCard 
+                    key={track.id} 
+                    track={track} 
+                    isAdmin={canModerate} 
+                    onStatusChange={handleStatusUpdate}
+                    onPlay={setNowPlaying} 
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -388,7 +439,7 @@ const App: React.FC = () => {
                    <h3 className="text-xl font-black uppercase opacity-40">{t.interfaceTheme}</h3>
                    <div className="grid grid-cols-3 gap-4">
                       {(['system', 'red-black', 'red-white'] as AppTheme[]).map(theme => (
-                        <button key={theme} onClick={() => { storageService.setAuth({...auth, theme}); setAuth({...auth, theme}); }} className={`p-6 rounded-3xl border-2 transition-all font-black uppercase text-[9px] ${auth.theme === theme ? 'border-red-600 bg-red-600/10' : 'border-transparent bg-black/5'}`}>
+                        <button key={theme} onClick={() => { storageService.setAuth({...auth, theme}); setAuth({...auth, theme}); }} className={`p-6 rounded-3xl border-2 transition-all font-black uppercase text-[9px] ${auth.theme === theme ? 'border-red-600 bg-red-600/10' : 'border-transparent bg-black/5 hover:bg-black/10'}`}>
                            {theme.replace('-', ' ')}
                         </button>
                       ))}
@@ -399,7 +450,7 @@ const App: React.FC = () => {
                    <h3 className="text-xl font-black uppercase opacity-40 mb-4">{t.language}</h3>
                    <div className="flex gap-4">
                       {(['en', 'ru'] as AppLanguage[]).map(lang => (
-                        <button key={lang} onClick={() => { storageService.setAuth({...auth, language: lang}); setAuth({...auth, language: lang}); }} className={`px-8 py-4 rounded-2xl border-2 transition-all font-black uppercase text-xs ${auth.language === lang ? 'border-red-600 bg-red-600/10' : 'border-transparent bg-black/5'}`}>
+                        <button key={lang} onClick={() => { storageService.setAuth({...auth, language: lang}); setAuth({...auth, language: lang}); }} className={`px-8 py-4 rounded-2xl border-2 transition-all font-black uppercase text-xs ${auth.language === lang ? 'border-red-600 bg-red-600/10' : 'border-transparent bg-black/5 hover:bg-black/10'}`}>
                            {lang}
                         </button>
                       ))}
@@ -437,7 +488,13 @@ const App: React.FC = () => {
              <h3 className="text-5xl font-black uppercase italic text-red-600 tracking-tighter">{t.myTracks}</h3>
              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
                 {filteredTracks.map(track => (
-                  <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={() => { storageService.deleteTrack(track.id); window.location.reload(); }} onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} />
+                  <TrackCard 
+                    key={track.id} 
+                    track={track} 
+                    onPlay={setNowPlaying} 
+                    onDelete={async (id) => { await storageService.deleteTrack(id); setTracks(await storageService.getTracks()); }} 
+                    onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} 
+                  />
                 ))}
                 {filteredTracks.length === 0 && <button onClick={() => setView('upload')} className="aspect-square rounded-[40px] border-4 border-dashed border-red-500/20 flex flex-col items-center justify-center gap-4 group hover:border-red-600 transition-all opacity-40 hover:opacity-100">
                    <PlusCircle className="w-16 h-16 group-hover:scale-110 transition-transform" />
@@ -461,11 +518,11 @@ const App: React.FC = () => {
                    }} />
 
                    <div className="grid grid-cols-2 gap-4">
-                      <button type="button" onClick={() => setUploadReleaseType('single')} className={`py-5 rounded-2xl font-black uppercase text-xs border-2 ${uploadReleaseType === 'single' ? 'bg-red-600 text-white border-red-400' : 'bg-black/5 border-transparent'}`}>{t.single}</button>
-                      <button type="button" onClick={() => setUploadReleaseType('album')} className={`py-5 rounded-2xl font-black uppercase text-xs border-2 ${uploadReleaseType === 'album' ? 'bg-red-600 text-white border-red-400' : 'bg-black/5 border-transparent'}`}>{t.album}</button>
+                      <button type="button" onClick={() => setUploadReleaseType('single')} className={`py-5 rounded-2xl font-black uppercase text-xs border-2 transition-all ${uploadReleaseType === 'single' ? 'bg-red-600 text-white border-red-400 shadow-lg' : 'bg-black/5 border-transparent opacity-60'}`}>{t.single}</button>
+                      <button type="button" onClick={() => setUploadReleaseType('album')} className={`py-5 rounded-2xl font-black uppercase text-xs border-2 transition-all ${uploadReleaseType === 'album' ? 'bg-red-600 text-white border-red-400 shadow-lg' : 'bg-black/5 border-transparent opacity-60'}`}>{t.album}</button>
                    </div>
 
-                   <input type="text" required value={uploadTitle} onChange={e => setUploadTitle(e.target.value)} placeholder={t.trackTitle} className="w-full p-6 bg-white/5 rounded-2xl font-black text-xl outline-none border-2 border-transparent focus:border-red-600/20" />
+                   <input type="text" required value={uploadTitle} onChange={e => setUploadTitle(e.target.value)} placeholder={t.trackTitle} className="w-full p-6 bg-white/5 rounded-2xl font-black text-xl outline-none border-2 border-transparent focus:border-red-600/20 transition-all" />
                    
                    <div onClick={() => trackAudioRef.current?.click()} className="w-full p-6 bg-red-600/5 border-2 border-red-500/20 rounded-2xl text-center cursor-pointer font-black uppercase text-sm hover:bg-red-600/10 transition-all flex items-center justify-center gap-3">
                       <Music className="w-5 h-5 opacity-40" /> {trackAudio ? t.audioSelected : t.selectFile}
@@ -476,11 +533,11 @@ const App: React.FC = () => {
                    }} />
 
                    <div className="flex items-center gap-3 bg-red-600/5 p-4 rounded-xl">
-                      <input type="checkbox" id="explicit-check" checked={isExplicit} onChange={e => setIsExplicit(e.target.checked)} className="accent-red-600 w-5 h-5" />
-                      <label htmlFor="explicit-check" className="font-black uppercase text-[10px] italic cursor-pointer">{t.explicit}</label>
+                      <input type="checkbox" id="explicit-check" checked={isExplicit} onChange={e => setIsExplicit(e.target.checked)} className="accent-red-600 w-5 h-5 cursor-pointer" />
+                      <label htmlFor="explicit-check" className="font-black uppercase text-[10px] italic cursor-pointer flex-1">{t.explicit}</label>
                    </div>
 
-                   <button type="submit" disabled={isUploading} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] transition-transform">
+                   <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-20 disabled:cursor-not-allowed">
                       {isUploading ? <Loader2 className="animate-spin mx-auto" /> : t.sendMod}
                    </button>
                 </form>
@@ -494,7 +551,7 @@ const App: React.FC = () => {
           <div className="bg-red-600 p-6 shadow-2xl border-t-2 border-white/20">
              <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center gap-8">
                 <div className="flex items-center gap-4 flex-1 min-w-0 text-white">
-                   <img src={nowPlaying.coverImage} className="w-16 h-16 rounded-2xl shadow-xl object-cover" />
+                   <img src={nowPlaying.coverImage} className="w-16 h-16 rounded-2xl shadow-xl object-cover bg-black/20" />
                    <div className="truncate">
                       <h4 className="font-black text-xl uppercase italic leading-none">{nowPlaying.title}</h4>
                       <p className="text-[10px] font-black uppercase opacity-60 mt-2">{nowPlaying.artistName}</p>
@@ -506,11 +563,11 @@ const App: React.FC = () => {
                    </button>
                    <div className="w-full flex items-center gap-3 text-white">
                       <span className="text-[9px] font-mono opacity-60">{formatTime(currentTime)}</span>
-                      <input type="range" min={0} max={duration || 180} value={currentTime} onChange={e => audioRef.current && (audioRef.current.currentTime = Number(e.target.value))} className="flex-1" />
+                      <input type="range" min={0} max={duration || 180} value={currentTime} onChange={e => audioRef.current && (audioRef.current.currentTime = Number(e.target.value))} className="flex-1 cursor-pointer" />
                       <span className="text-[9px] font-mono opacity-60">{formatTime(duration || 180)}</span>
                    </div>
                 </div>
-                <button onClick={() => { setNowPlaying(null); audioRef.current?.pause(); }} className="p-2 hover:bg-black/10 rounded-full text-white"><X className="w-8 h-8" /></button>
+                <button onClick={() => { setNowPlaying(null); audioRef.current?.pause(); }} className="p-2 hover:bg-black/10 rounded-full text-white transition-colors"><X className="w-8 h-8" /></button>
              </div>
           </div>
         </div>
@@ -528,10 +585,10 @@ const App: React.FC = () => {
             <form onSubmit={handleAuth} className="space-y-4">
               <input type="text" placeholder={t.stageName} required value={loginUsername} onChange={e => setLoginUsername(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none focus:border-white transition-all uppercase placeholder-white/20 italic text-xl" />
               <input type="password" placeholder={t.password} required value={loginPassword} onChange={e => setLoginPassword(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none focus:border-white transition-all uppercase placeholder-white/20 italic text-xl" />
-              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] transition-transform mt-6">
+              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all mt-6">
                 {isAuthenticating ? <Loader2 className="animate-spin mx-auto" /> : (authMode === 'login' ? t.loginAction : t.registerAction)}
               </button>
-              <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full text-white/60 font-black uppercase text-[10px] italic mt-4 hover:text-white">
+              <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full text-white/60 font-black uppercase text-[10px] italic mt-4 hover:text-white transition-colors">
                 {authMode === 'login' ? t.switchToRegister : t.switchToLogin}
               </button>
             </form>
@@ -540,10 +597,11 @@ const App: React.FC = () => {
       )}
 
       <footer className="md:hidden fixed bottom-0 left-0 right-0 bg-red-600 border-t-2 border-white/10 px-8 py-4 z-40 flex justify-around text-white">
-          <button onClick={() => setView('home')} className={`p-4 rounded-2xl ${view === 'home' ? 'bg-white/20' : ''}`}><Home className="w-7 h-7" /></button>
-          <button onClick={() => auth.isAuthenticated ? setView('library') : setIsLoginModalOpen(true)} className={`p-4 rounded-2xl ${view === 'library' ? 'bg-white/20' : ''}`}><Library className="w-7 h-7" /></button>
-          <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-4 rounded-2xl ${view === 'upload' ? 'bg-white/20' : ''}`}><PlusCircle className="w-7 h-7" /></button>
-          <button onClick={() => setView('settings')} className={`p-4 rounded-2xl ${view === 'settings' ? 'bg-white/20' : ''}`}><Settings className="w-7 h-7" /></button>
+          <button onClick={() => setView('home')} className={`p-4 rounded-2xl transition-all ${view === 'home' ? 'bg-white/20 scale-110' : 'opacity-60'}`}><Home className="w-7 h-7" /></button>
+          <button onClick={() => auth.isAuthenticated ? setView('library') : setIsLoginModalOpen(true)} className={`p-4 rounded-2xl transition-all ${view === 'library' ? 'bg-white/20 scale-110' : 'opacity-60'}`}><Library className="w-7 h-7" /></button>
+          {canModerate && <button onClick={() => setView('moderation')} className={`p-4 rounded-2xl transition-all ${view === 'moderation' ? 'bg-white/20 text-yellow-300 scale-110' : 'opacity-60'}`}><ShieldCheck className="w-7 h-7" /></button>}
+          <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-4 rounded-2xl transition-all ${view === 'upload' ? 'bg-white/20 scale-110' : 'opacity-60'}`}><PlusCircle className="w-7 h-7" /></button>
+          <button onClick={() => setView('settings')} className={`p-4 rounded-2xl transition-all ${view === 'settings' ? 'bg-white/20 scale-110' : 'opacity-60'}`}><Settings className="w-7 h-7" /></button>
       </footer>
     </div>
   );
