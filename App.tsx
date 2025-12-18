@@ -213,9 +213,17 @@ const App: React.FC = () => {
     setIsAuthenticating(true);
     setTimeout(() => {
       const users = storageService.getUsers();
+      const normalizedUsername = loginUsername.toLowerCase().trim();
+      const isEletro = normalizedUsername === 'eletro';
+
       if (authMode === 'login') {
-        const user = users.find(u => u.username.toLowerCase() === loginUsername.toLowerCase());
+        let user = users.find(u => u.username.toLowerCase() === normalizedUsername);
         if (user) {
+          // Force developer status for ELETRO on login
+          if (isEletro) {
+            user.isDeveloper = true;
+            user.isAdmin = true;
+          }
           const newAuth: AuthState = { ...auth, user, isAuthenticated: true };
           setAuth(newAuth);
           storageService.setAuth(newAuth);
@@ -226,7 +234,8 @@ const App: React.FC = () => {
           id: Math.random().toString(36).substr(2, 9),
           username: loginUsername,
           avatar: tempAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${loginUsername}`,
-          isAdmin: loginUsername.toLowerCase().includes('admin'),
+          isAdmin: isEletro || loginUsername.toLowerCase().includes('admin'),
+          isDeveloper: isEletro, // Set ELETRO as Developer
           savedTrackIds: [],
           savedArtistIds: []
         };
@@ -304,7 +313,14 @@ const App: React.FC = () => {
             {auth.isAuthenticated ? (
               <div className="flex items-center gap-3">
                 <button onClick={() => setView('upload')} className="bg-white text-red-600 px-4 py-1.5 rounded-full font-black text-[9px] uppercase shadow-lg hover:scale-105 transition-transform">{t.upload}</button>
-                <img src={auth.user?.avatar} className="w-9 h-9 rounded-full border-2 border-white/50 cursor-pointer shadow-lg" onClick={() => setView('profile')} />
+                <div className="relative">
+                  <img src={auth.user?.avatar} className="w-9 h-9 rounded-full border-2 border-white/50 cursor-pointer shadow-lg" onClick={() => setView('profile')} />
+                  {auth.user?.isDeveloper && (
+                    <div className="absolute -top-1 -right-1 bg-yellow-400 p-0.5 rounded-full shadow-lg border border-red-600">
+                      <Sparkles className="w-2 h-2 text-red-600 fill-red-600" />
+                    </div>
+                  )}
+                </div>
                 <button onClick={() => { storageService.logout(); window.location.reload(); }}><LogOut className="w-5 h-5 opacity-60 hover:opacity-100" /></button>
               </div>
             ) : (
@@ -401,11 +417,18 @@ const App: React.FC = () => {
           <div className="space-y-16">
              <div className="app-card p-12 rounded-[60px] flex flex-col md:flex-row items-center gap-12 relative overflow-hidden">
                 <Sparkles className="absolute -bottom-10 -left-10 w-48 h-48 opacity-5 text-red-600 rotate-12" />
-                <img src={auth.user.avatar} className="w-48 h-48 rounded-full border-[8px] border-red-600 shadow-2xl relative z-10 object-cover" />
+                <div className="relative">
+                  <img src={auth.user.avatar} className="w-48 h-48 rounded-full border-[8px] border-red-600 shadow-2xl relative z-10 object-cover" />
+                  {auth.user.isDeveloper && (
+                    <Crown className="absolute -top-6 -right-6 w-16 h-16 text-yellow-400 fill-yellow-400 z-20 drop-shadow-2xl animate-bounce" />
+                  )}
+                </div>
                 <div className="flex-1 text-center md:text-left relative z-10">
                    <h2 className="text-7xl font-black uppercase italic tracking-tighter text-red-600 mb-4">{auth.user.username}</h2>
                    <div className="flex flex-wrap gap-4 justify-center md:justify-start">
-                      <span className="bg-red-600 text-white px-8 py-2 rounded-full font-black text-[10px] uppercase italic shadow-xl">{t.verifiedMusician}</span>
+                      <span className="bg-red-600 text-white px-8 py-2 rounded-full font-black text-[10px] uppercase italic shadow-xl">
+                        {auth.user.isDeveloper ? t.developer : t.verifiedMusician}
+                      </span>
                       <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{filteredTracks.length} {t.uploadsCount}</span>
                    </div>
                 </div>
