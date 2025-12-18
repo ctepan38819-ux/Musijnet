@@ -15,11 +15,14 @@ export const storageService = {
   getRemoteData: async (): Promise<{ tracks: Track[], users: User[] }> => {
     try {
       const response = await fetch(CLOUD_STORAGE_URL);
-      if (!response.ok) throw new Error('Cloud offline');
-      return await response.json();
+      if (response.status === 404) {
+        return { tracks: [], users: [] }; // Initial state
+      }
+      if (!response.ok) throw new Error('Cloud offline or rejected request');
+      const text = await response.text();
+      return text ? JSON.parse(text) : { tracks: [], users: [] };
     } catch (e) {
       console.warn("Cloud sync failed, falling back to local simulation", e);
-      // Fallback to local if server is down
       const localTracks = localStorage.getItem('musijnet_fallback_tracks');
       const localUsers = localStorage.getItem('musijnet_fallback_users');
       return {
@@ -31,15 +34,28 @@ export const storageService = {
 
   saveRemoteData: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
     try {
-      await fetch(CLOUD_STORAGE_URL, {
-        method: 'POST',
+      // KVDB requires PUT to update/set the value of a key
+      const response = await fetch(CLOUD_STORAGE_URL, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json'
+        },
         body: JSON.stringify(data),
       });
+
+      if (!response.ok) {
+        if (response.status === 413) {
+          throw new Error('Файл слишком велик для сервера (лимит KVDB)');
+        }
+        throw new Error(`Server error: ${response.status}`);
+      }
+
       // Save backup locally
       localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(data.tracks));
       localStorage.setItem('musijnet_fallback_users', JSON.stringify(data.users));
     } catch (e) {
       console.error("Critical: Failed to push to Cloud Node", e);
+      throw e; // Rethrow to handle in UI
     }
   },
 
@@ -54,7 +70,6 @@ export const storageService = {
       remote.users.push(user);
       await storageService.saveRemoteData(remote);
     }
-    // Also keep in local users for quick lookup
     const localUsers = storageService.getUsers();
     localUsers.push(user);
     localStorage.setItem(USERS_KEY, JSON.stringify(localUsers));
@@ -98,7 +113,6 @@ export const storageService = {
       else user.savedTrackIds.splice(trackIndex, 1);
       await storageService.saveRemoteData(remote);
       
-      // Update local session if it's the current user
       const auth = storageService.getAuth();
       if (auth.user?.id === userId) {
         auth.user = user;

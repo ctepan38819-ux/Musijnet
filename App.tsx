@@ -43,7 +43,8 @@ import {
   WifiOff,
   Database,
   RefreshCw,
-  LayoutDashboard
+  LayoutDashboard,
+  AlertCircle
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
@@ -81,6 +82,7 @@ const App: React.FC = () => {
   const [trackCover, setTrackCover] = useState<string | null>(null);
   const [trackAudio, setTrackAudio] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadReleaseType, setUploadReleaseType] = useState<ReleaseType>('single');
 
   const [isSecretGameOpen, setIsSecretGameOpen] = useState(false);
@@ -95,35 +97,33 @@ const App: React.FC = () => {
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
 
   // Load Cloud Data on startup and every 30 seconds
-  useEffect(() => {
-    const syncData = async (silent = false) => {
-      if (!silent) setIsLoadingTracks(true);
-      setIsSyncing(true);
-      try {
-        const remote = await storageService.getRemoteData();
-        setTracks(remote.tracks);
-        setAllUsers(remote.users);
-        
-        // If current user is logged in, refresh their local data from cloud
-        if (auth.user) {
-          const freshUser = remote.users.find(u => u.id === auth.user?.id);
-          if (freshUser) {
-            const newAuth = { ...auth, user: freshUser };
-            setAuth(newAuth);
-            storageService.setAuth(newAuth);
-          }
+  const syncData = async (silent = false) => {
+    if (!silent) setIsLoadingTracks(true);
+    setIsSyncing(true);
+    try {
+      const remote = await storageService.getRemoteData();
+      setTracks(remote.tracks);
+      setAllUsers(remote.users);
+      
+      if (auth.user) {
+        const freshUser = remote.users.find(u => u.id === auth.user?.id);
+        if (freshUser) {
+          const newAuth = { ...auth, user: freshUser };
+          setAuth(newAuth);
+          storageService.setAuth(newAuth);
         }
-      } catch (e) {
-        console.error("Cloud Sync Failed", e);
-      } finally {
-        setIsLoadingTracks(false);
-        setIsSyncing(false);
       }
-    };
+    } catch (e) {
+      console.error("Cloud Sync Failed", e);
+    } finally {
+      setIsLoadingTracks(false);
+      setIsSyncing(false);
+    }
+  };
 
+  useEffect(() => {
     syncData();
     fetchGlobalDiscovery();
-
     const interval = setInterval(() => syncData(true), 30000);
     return () => clearInterval(interval);
   }, []);
@@ -267,6 +267,8 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!uploadTitle || !trackCover || !trackAudio || !auth.user) return;
     setIsUploading(true);
+    setUploadError(null);
+
     const newTrack: Track = {
       id: Math.random().toString(36).substr(2, 9),
       title: uploadTitle,
@@ -280,23 +282,28 @@ const App: React.FC = () => {
       status: 'pending',
       createdAt: Date.now()
     };
-    await storageService.saveTrack(newTrack);
-    const updatedTracks = await storageService.getTracks();
-    setTracks(updatedTracks);
-    setView('profile');
-    setIsUploading(false);
-    setUploadTitle('');
-    setTrackCover(null);
-    setTrackAudio(null);
-    setIsExplicit(false);
+
+    try {
+      await storageService.saveTrack(newTrack);
+      await syncData(); // Immediate cloud sync after upload
+      setView('profile');
+      // Reset form
+      setUploadTitle('');
+      setTrackCover(null);
+      setTrackAudio(null);
+      setIsExplicit(false);
+    } catch (err: any) {
+      setUploadError(err.message || "Ошибка загрузки на сервер.");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleDeleteTrack = async (id: string) => {
     setIsSyncing(true);
     try {
       await storageService.deleteTrack(id);
-      const updatedTracks = await storageService.getTracks();
-      setTracks(updatedTracks);
+      await syncData(true);
       if (nowPlaying?.id === id) {
         setNowPlaying(null);
         audioRef.current?.pause();
@@ -310,9 +317,12 @@ const App: React.FC = () => {
 
   const handleStatusUpdate = async (trackId: string, status: Track['status']) => {
     setIsSyncing(true);
-    const updatedTracks = await storageService.updateTrackStatus(trackId, status);
-    setTracks(updatedTracks);
-    setIsSyncing(false);
+    try {
+      const updatedTracks = await storageService.updateTrackStatus(trackId, status);
+      setTracks(updatedTracks);
+    } finally {
+      setIsSyncing(false);
+    }
   };
 
   const filteredTracks = useMemo(() => {
@@ -411,8 +421,7 @@ const App: React.FC = () => {
                     {isFetchingGlobal ? <Loader2 className="animate-spin text-red-600 mx-auto" /> : globalTracks.map(track => (
                       <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleDeleteTrack} onToggleSave={async () => {
                         await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
-                        const updatedTracks = await storageService.getTracks();
-                        setTracks(updatedTracks);
+                        await syncData(true);
                       }} />
                     ))}
                  </div>
@@ -433,8 +442,7 @@ const App: React.FC = () => {
                         {filteredTracks.map(track => (
                           <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleDeleteTrack} onToggleSave={async () => {
                             await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
-                            const updatedTracks = await storageService.getTracks();
-                            setTracks(updatedTracks);
+                            await syncData(true);
                           }} />
                         ))}
                      </div>
@@ -538,7 +546,7 @@ const App: React.FC = () => {
                     onDelete={handleDeleteTrack}
                     onToggleSave={async () => {
                       await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
-                      setTracks(await storageService.getTracks());
+                      await syncData(true);
                     }} 
                   />
                 ))}
@@ -578,7 +586,7 @@ const App: React.FC = () => {
                     onDelete={handleDeleteTrack} 
                     onToggleSave={async () => {
                       await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
-                      setTracks(await storageService.getTracks());
+                      await syncData(true);
                     }} 
                   />
                 ))}
@@ -595,6 +603,13 @@ const App: React.FC = () => {
              <div className="app-card p-12 rounded-[50px] shadow-2xl">
                 <h2 className="text-4xl font-black uppercase italic text-red-600 mb-10">{t.dropTrack}</h2>
                 <form onSubmit={handleUpload} className="space-y-8">
+                   {uploadError && (
+                     <div className="bg-red-600/20 border-2 border-red-600 p-4 rounded-2xl flex items-center gap-3 text-red-600 font-bold text-xs uppercase animate-shake">
+                        <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                        <span>{uploadError}</span>
+                     </div>
+                   )}
+
                    <div onClick={() => trackCoverRef.current?.click()} className="w-64 h-64 mx-auto bg-black/5 border-2 border-dashed border-red-500/20 rounded-[40px] flex items-center justify-center cursor-pointer group hover:bg-red-500/5 transition-all overflow-hidden relative">
                       {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <ImageIcon className="w-16 h-16 opacity-10 group-hover:opacity-30 transition-opacity" />}
                    </div>
@@ -624,7 +639,7 @@ const App: React.FC = () => {
                    </div>
 
                    <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] active:scale-95 transition-all disabled:opacity-20 disabled:cursor-not-allowed">
-                      {isUploading ? <Loader2 className="animate-spin mx-auto" /> : t.sendMod}
+                      {isUploading ? <div className="flex items-center justify-center gap-3"><Loader2 className="animate-spin" /> <span>Deploying...</span></div> : t.sendMod}
                    </button>
                 </form>
              </div>
