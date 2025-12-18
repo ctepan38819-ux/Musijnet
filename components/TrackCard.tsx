@@ -1,8 +1,8 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Track } from '../types';
 import { translations } from '../translations';
-import { Play, ShieldAlert, CheckCircle, Clock, Trash2, ListPlus, X, Download, Heart, HeartOff } from 'lucide-react';
+import { Play, ShieldAlert, CheckCircle, Clock, Trash2, ListPlus, X, Download, Heart, HeartOff, Loader2 } from 'lucide-react';
 import { storageService } from '../services/storageService';
 
 interface TrackCardProps {
@@ -28,8 +28,23 @@ const TrackCard: React.FC<TrackCardProps> = ({
   const lang = (auth as any).language || 'ru';
   const t = translations[lang as keyof typeof translations];
   const [showConfirm, setShowConfirm] = useState(false);
+  const [coverUrl, setCoverUrl] = useState<string>(track.coverImage);
+  const [isCoverLoading, setIsCoverLoading] = useState(!track.coverImage);
 
-  // Author, Admin, or Developer can delete
+  // Load cover blob if not present in track metadata
+  useEffect(() => {
+    if (!track.coverImage) {
+      setIsCoverLoading(true);
+      storageService.getBlob(`cover_${track.id}`).then(url => {
+        setCoverUrl(url || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&h=400&fit=crop');
+        setIsCoverLoading(false);
+      }).catch(() => {
+        setCoverUrl('https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&h=400&fit=crop');
+        setIsCoverLoading(false);
+      });
+    }
+  }, [track.id, track.coverImage]);
+
   const canDelete = auth.user && (
     auth.user.isDeveloper || 
     auth.user.isAdmin || 
@@ -56,23 +71,29 @@ const TrackCard: React.FC<TrackCardProps> = ({
     rejected: t.rejected
   };
 
-  const handleDownload = (e: React.MouseEvent) => {
+  const handleDownload = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    const link = document.createElement('a');
-    link.href = track.audioFile;
-    link.download = `${track.artistName} - ${track.title}.mp3`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+    try {
+      const audioSource = await storageService.getBlob(`audio_${track.id}`);
+      const link = document.createElement('a');
+      link.href = audioSource;
+      link.download = `${track.artistName} - ${track.title}.mp3`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      alert("Не удалось извлечь файл.");
+    }
   };
 
   return (
     <div className="app-card p-4 rounded-2xl hover:border-red-500 transition-all group shadow-sm relative overflow-hidden">
       <div className="flex flex-col gap-4">
-        <div className="relative aspect-square overflow-hidden rounded-xl bg-red-900/20">
+        <div className="relative aspect-square overflow-hidden rounded-xl bg-red-900/20 flex items-center justify-center">
+          {isCoverLoading && <Loader2 className="w-8 h-8 animate-spin text-red-600 opacity-20" />}
           <img 
-            src={track.coverImage || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&h=400&fit=crop'} 
-            className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500" 
+            src={coverUrl || 'https://images.unsplash.com/photo-1470225620780-dba8ba36b745?w=400&h=400&fit=crop'} 
+            className={`w-full h-full object-cover group-hover:scale-105 transition-transform duration-500 ${isCoverLoading ? 'opacity-0' : 'opacity-100'}`} 
             alt={track.title} 
           />
           <button 
@@ -94,7 +115,6 @@ const TrackCard: React.FC<TrackCardProps> = ({
              </span>
           </div>
 
-          {/* Action Icons for Users */}
           <div className="absolute bottom-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
             {auth.isAuthenticated && (
               <>
@@ -158,7 +178,6 @@ const TrackCard: React.FC<TrackCardProps> = ({
         )}
       </div>
 
-      {/* Deletion Confirmation Overlay */}
       {showConfirm && (
         <div className="absolute inset-0 bg-red-600/95 backdrop-blur-md z-50 flex flex-col items-center justify-center p-4 text-center">
           <ShieldAlert className="w-12 h-12 text-white mb-2 animate-bounce" />

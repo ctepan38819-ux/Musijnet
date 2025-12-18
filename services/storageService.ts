@@ -3,11 +3,10 @@ import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
 const USERS_KEY = 'musijnet_local_users';
-// Updated to a fresh unique bucket ID for musijnet
-const BUCKET_URL = 'https://kvdb.io/MN_v1_production_node_final';
-const MANIFEST_KEY = 'musijnet_manifest_v5';
+// Standard-like bucket ID for better reliability with KVDB
+const BUCKET_URL = 'https://kvdb.io/N4m9xR2pW5tQ8vK1zL7j';
+const MANIFEST_KEY = 'musijnet_manifest_v6';
 
-// Helper for fetch with timeout
 const fetchWithTimeout = async (url: string, options: any = {}, timeout = 45000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
@@ -32,7 +31,6 @@ export const storageService = {
         mode: 'cors',
         cache: 'no-store'
       });
-      // 404 on GET means the database is empty (first initialization)
       if (response.status === 404) return { tracks: [], users: [] };
       if (!response.ok) throw new Error(`Ошибка сервера: ${response.status}`);
       const text = await response.text();
@@ -49,9 +47,11 @@ export const storageService = {
   },
 
   saveRemoteManifest: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
+    // Ensure we don't store large base64 data in the manifest
     const cleanTracks = data.tracks.map(t => ({ 
       ...t, 
       audioFile: '', 
+      coverImage: t.coverImage?.startsWith('data:') ? '' : t.coverImage // Only keep references or empty
     }));
     
     try {
@@ -62,8 +62,7 @@ export const storageService = {
         body: JSON.stringify({ tracks: cleanTracks, users: data.users }),
       });
       if (!response.ok) {
-        if (response.status === 404) throw new Error("Сбой хранилища: Конечная точка не найдена (404).");
-        throw new Error(`Ошибка сохранения (${response.status})`);
+        throw new Error(`Ошибка сохранения манифеста (${response.status}). Возможно, база данных переполнена.`);
       }
       
       localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(cleanTracks));
@@ -74,35 +73,32 @@ export const storageService = {
     }
   },
 
-  // Binary Blob upload to keep overhead low
-  saveAudioBlob: async (trackId: string, audioBlob: Blob): Promise<void> => {
+  saveBlob: async (id: string, blob: Blob): Promise<void> => {
     try {
-      const response = await fetchWithTimeout(`${BUCKET_URL}/audio_${trackId}`, {
+      const response = await fetchWithTimeout(`${BUCKET_URL}/${id}`, {
         method: 'PUT',
         mode: 'cors',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: audioBlob,
+        body: blob,
       }, 60000);
       
       if (!response.ok) {
-        if (response.status === 413) throw new Error('Файл слишком велик (лимит сервера 1МБ)');
-        if (response.status === 404) throw new Error('Ошибка 404: Путь загрузки заблокирован или недоступен.');
-        throw new Error(`Ошибка сервера: ${response.status}`);
+        if (response.status === 413) throw new Error('Файл слишком велик (лимит 1МБ)');
+        throw new Error(`Ошибка сервера при загрузке контента: ${response.status}`);
       }
     } catch (err: any) {
-      if (err.name === 'AbortError') throw new Error("Таймаут загрузки. Файл слишком большой для текущей скорости сети.");
-      if (err instanceof TypeError) throw new Error("Сетевая ошибка: сервис заблокировал запрос (проверьте интернет или размер файла).");
+      if (err.name === 'AbortError') throw new Error("Таймаут загрузки.");
       throw err;
     }
   },
 
-  getAudioBlob: async (trackId: string): Promise<string> => {
-    const response = await fetchWithTimeout(`${BUCKET_URL}/audio_${trackId}`, {
+  getBlob: async (id: string): Promise<string> => {
+    const response = await fetchWithTimeout(`${BUCKET_URL}/${id}`, {
       method: 'GET',
       mode: 'cors',
       cache: 'no-store'
     });
-    if (!response.ok) throw new Error('Аудио не найдено на сервере');
+    if (!response.ok) return '';
     
     const blob = await response.blob();
     return new Promise((resolve, reject) => {
@@ -139,10 +135,16 @@ export const storageService = {
     return remote.tracks;
   },
 
-  saveTrack: async (track: Track, audioBlob: Blob): Promise<void> => {
-    await storageService.saveAudioBlob(track.id, audioBlob);
+  saveTrack: async (track: Track, audioBlob: Blob, coverBlob: Blob): Promise<void> => {
+    // 1. Upload cover image
+    await storageService.saveBlob(`cover_${track.id}`, coverBlob);
+    // 2. Upload audio
+    await storageService.saveBlob(`audio_${track.id}`, audioBlob);
+    // 3. Save metadata
     const remote = await storageService.getRemoteManifest();
-    remote.tracks.push(track);
+    // In manifest, we just clear the fields that are now in separate blobs
+    const trackMetadata = { ...track, audioFile: '', coverImage: '' };
+    remote.tracks.push(trackMetadata);
     await storageService.saveRemoteManifest(remote);
   },
 
@@ -150,6 +152,7 @@ export const storageService = {
     const remote = await storageService.getRemoteManifest();
     remote.tracks = remote.tracks.filter(t => t.id !== trackId);
     await storageService.saveRemoteManifest(remote);
+    // Blobs will remain orphans on the server but we keep the manifest clean
   },
 
   updateTrackStatus: async (trackId: string, status: Track['status']): Promise<Track[]> => {

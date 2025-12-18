@@ -133,7 +133,7 @@ const App: React.FC = () => {
     try {
       let audioSource = track.audioFile;
       if (!audioSource) {
-        audioSource = await storageService.getAudioBlob(track.id);
+        audioSource = await storageService.getBlob(`audio_${track.id}`);
       }
 
       if (!audioRef.current) audioRef.current = new Audio();
@@ -215,10 +215,11 @@ const App: React.FC = () => {
     
     setIsUploading(true);
     setUploadError(null);
-    setUploadStep('Подготовка бинарного пакета...');
+    setUploadStep('Упаковка данных...');
 
     const trackId = Math.random().toString(36).substr(2, 9);
     const audioBlob = dataURLtoBlob(trackAudio);
+    const coverBlob = dataURLtoBlob(trackCover);
 
     const newTrack: Track = {
       id: trackId,
@@ -226,8 +227,8 @@ const App: React.FC = () => {
       artistId: auth.user.id,
       artistName: auth.user.username,
       artistAvatar: auth.user.avatar,
-      coverImage: trackCover,
-      audioFile: '', 
+      coverImage: '', // Will be stored as blob
+      audioFile: '', // Will be stored as blob
       isExplicit: isExplicit,
       releaseType: uploadReleaseType,
       status: 'pending',
@@ -235,9 +236,10 @@ const App: React.FC = () => {
     };
 
     try {
-      setUploadStep('Передача аудио-блока (Binary)...');
-      await storageService.saveTrack(newTrack, audioBlob);
-      setUploadStep('Синхронизация реестра...');
+      setUploadStep('Загрузка обложки...');
+      // Note: storageService.saveTrack now takes both blobs
+      await storageService.saveTrack(newTrack, audioBlob, coverBlob);
+      setUploadStep('Финальная синхронизация...');
       await syncData(true); 
       setView('profile');
       setUploadTitle('');
@@ -400,7 +402,7 @@ const App: React.FC = () => {
                      <div className="bg-red-600/20 border-2 border-red-600 p-6 rounded-3xl flex items-start gap-3 text-red-600 font-bold text-xs uppercase animate-shake shadow-inner">
                         <AlertCircle className="w-6 h-6 flex-shrink-0" />
                         <div className="flex flex-col gap-1">
-                           <span className="text-sm font-black italic">Ошибка подключения (404/500)</span>
+                           <span className="text-sm font-black italic">Ошибка (500/База переполнена)</span>
                            <span className="opacity-70 leading-relaxed font-medium">{uploadError}</span>
                         </div>
                      </div>
@@ -424,7 +426,7 @@ const App: React.FC = () => {
                             Размер: {(trackAudioSize/1024).toFixed(1)} КБ {trackAudioSize > MAX_BINARY_SIZE ? '(Слишком велик!)' : ''}
                           </span>
                         )}
-                        {!trackAudio && <span className="text-[8px] opacity-40 font-medium">Рекомендуется до 950 КБ</span>}
+                        {!trackAudio && <span className="text-[8px] opacity-40 font-medium">Макс. 950 КБ</span>}
                       </div>
                    </div>
                    <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={e => {
