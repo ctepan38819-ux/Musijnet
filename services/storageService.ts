@@ -1,34 +1,46 @@
 
-import { User, Track, AuthState, Playlist, SyncData } from '../types';
+import { User, Track, AuthState, Playlist } from '../types';
 
-const USERS_KEY = 'musijnet_users';
 const AUTH_KEY = 'musijnet_session';
-const DB_NAME = 'musijnet_db';
-const TRACKS_STORE = 'tracks';
-const PLAYLISTS_STORE = 'playlists';
-
-// IndexedDB Initialization for large audio/image data
-const initDB = (): Promise<IDBDatabase> => {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 4); 
-    request.onupgradeneeded = (event) => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(TRACKS_STORE)) {
-        db.createObjectStore(TRACKS_STORE, { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains(PLAYLISTS_STORE)) {
-        db.createObjectStore(PLAYLISTS_STORE, { keyPath: 'id' });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-};
+const USERS_KEY = 'musijnet_local_users';
+// This bucket ID is unique to Musijnet global synchronization
+const CLOUD_STORAGE_URL = 'https://kvdb.io/Mo7Xz5P6eE6zVqY1HqNqfU/musijnet_global_v2';
 
 export const storageService = {
-  // Now returns true by default to simulate immediate server connection
   isServerConnected: (): boolean => {
     return true; 
+  },
+
+  // Remote Fetching Logic
+  getRemoteData: async (): Promise<{ tracks: Track[], users: User[] }> => {
+    try {
+      const response = await fetch(CLOUD_STORAGE_URL);
+      if (!response.ok) throw new Error('Cloud offline');
+      return await response.json();
+    } catch (e) {
+      console.warn("Cloud sync failed, falling back to local simulation", e);
+      // Fallback to local if server is down
+      const localTracks = localStorage.getItem('musijnet_fallback_tracks');
+      const localUsers = localStorage.getItem('musijnet_fallback_users');
+      return {
+        tracks: localTracks ? JSON.parse(localTracks) : [],
+        users: localUsers ? JSON.parse(localUsers) : []
+      };
+    }
+  },
+
+  saveRemoteData: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
+    try {
+      await fetch(CLOUD_STORAGE_URL, {
+        method: 'POST',
+        body: JSON.stringify(data),
+      });
+      // Save backup locally
+      localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(data.tracks));
+      localStorage.setItem('musijnet_fallback_users', JSON.stringify(data.users));
+    } catch (e) {
+      console.error("Critical: Failed to push to Cloud Node", e);
+    }
   },
 
   getUsers: (): User[] => {
@@ -36,101 +48,63 @@ export const storageService = {
     return data ? JSON.parse(data) : [];
   },
 
-  saveUser: (user: User) => {
-    const users = storageService.getUsers();
-    users.push(user);
-    localStorage.setItem(USERS_KEY, JSON.stringify(users));
-    storageService.syncToServer();
-  },
-
-  updateUserRole: (userId: string, isAdmin: boolean) => {
-    const users = storageService.getUsers();
-    const userIndex = users.findIndex(u => u.id === userId);
-    if (userIndex !== -1) {
-      users[userIndex].isAdmin = isAdmin;
-      localStorage.setItem(USERS_KEY, JSON.stringify(users));
-      storageService.syncToServer();
+  saveUser: async (user: User) => {
+    const remote = await storageService.getRemoteData();
+    if (!remote.users.find(u => u.username.toLowerCase() === user.username.toLowerCase())) {
+      remote.users.push(user);
+      await storageService.saveRemoteData(remote);
     }
+    // Also keep in local users for quick lookup
+    const localUsers = storageService.getUsers();
+    localUsers.push(user);
+    localStorage.setItem(USERS_KEY, JSON.stringify(localUsers));
   },
 
-  toggleSavedTrack: (userId: string, trackId: string) => {
-    const users = storageService.getUsers();
-    const userIndex = users.findIndex(u => u.id === userId);
+  getTracks: async (): Promise<Track[]> => {
+    const remote = await storageService.getRemoteData();
+    return remote.tracks;
+  },
+
+  saveTrack: async (track: Track): Promise<void> => {
+    const remote = await storageService.getRemoteData();
+    remote.tracks.push(track);
+    await storageService.saveRemoteData(remote);
+  },
+
+  deleteTrack: async (trackId: string): Promise<void> => {
+    const remote = await storageService.getRemoteData();
+    remote.tracks = remote.tracks.filter(t => t.id !== trackId);
+    await storageService.saveRemoteData(remote);
+  },
+
+  updateTrackStatus: async (trackId: string, status: Track['status']): Promise<Track[]> => {
+    const remote = await storageService.getRemoteData();
+    const track = remote.tracks.find(t => t.id === trackId);
+    if (track) {
+      track.status = status;
+      await storageService.saveRemoteData(remote);
+    }
+    return remote.tracks;
+  },
+
+  toggleSavedTrack: async (userId: string, trackId: string) => {
+    const remote = await storageService.getRemoteData();
+    const userIndex = remote.users.findIndex(u => u.id === userId);
     if (userIndex !== -1) {
-      const user = users[userIndex];
+      const user = remote.users[userIndex];
       if (!user.savedTrackIds) user.savedTrackIds = [];
       const trackIndex = user.savedTrackIds.indexOf(trackId);
       if (trackIndex === -1) user.savedTrackIds.push(trackId);
       else user.savedTrackIds.splice(trackIndex, 1);
-      localStorage.setItem(USERS_KEY, JSON.stringify(users));
-      storageService.syncToServer();
+      await storageService.saveRemoteData(remote);
+      
+      // Update local session if it's the current user
+      const auth = storageService.getAuth();
+      if (auth.user?.id === userId) {
+        auth.user = user;
+        storageService.setAuth(auth);
+      }
     }
-  },
-
-  toggleSavedArtist: (userId: string, artistId: string) => {
-    const users = storageService.getUsers();
-    const userIndex = users.findIndex(u => u.id === userId);
-    if (userIndex !== -1) {
-      const user = users[userIndex];
-      if (!user.savedArtistIds) user.savedArtistIds = [];
-      const artistIndex = user.savedArtistIds.indexOf(artistId);
-      if (artistIndex === -1) user.savedArtistIds.push(artistId);
-      else user.savedArtistIds.splice(artistIndex, 1);
-      localStorage.setItem(USERS_KEY, JSON.stringify(users));
-      storageService.syncToServer();
-    }
-  },
-
-  getTracks: async (): Promise<Track[]> => {
-    const db = await initDB();
-    return new Promise((resolve) => {
-      const transaction = db.transaction(TRACKS_STORE, 'readonly');
-      const store = transaction.objectStore(TRACKS_STORE);
-      const request = store.getAll();
-      request.onsuccess = () => resolve(request.result);
-    });
-  },
-
-  saveTrack: async (track: Track): Promise<void> => {
-    const db = await initDB();
-    const transaction = db.transaction(TRACKS_STORE, 'readwrite');
-    transaction.objectStore(TRACKS_STORE).put(track);
-    return new Promise((resolve) => {
-      transaction.oncomplete = () => {
-        storageService.syncToServer();
-        resolve();
-      };
-    });
-  },
-
-  deleteTrack: async (trackId: string): Promise<void> => {
-    const db = await initDB();
-    const transaction = db.transaction(TRACKS_STORE, 'readwrite');
-    transaction.objectStore(TRACKS_STORE).delete(trackId);
-    return new Promise((resolve) => {
-      transaction.oncomplete = () => {
-        storageService.syncToServer();
-        resolve();
-      };
-    });
-  },
-
-  updateTrackStatus: async (trackId: string, status: Track['status']): Promise<Track[]> => {
-    const db = await initDB();
-    const tracks = await storageService.getTracks();
-    const track = tracks.find(t => t.id === trackId);
-    if (track) {
-      track.status = status;
-      await storageService.saveTrack(track);
-    }
-    return storageService.getTracks();
-  },
-
-  // AUTOMATIC SYNC - Simulates background push to the central Vercel node
-  syncToServer: async (): Promise<void> => {
-    console.log("Pushing updates to Musijnet Central Node...");
-    // In a production environment, this would call a Vercel Serverless Function
-    // for now we ensure state consistency locally to simulate the persistence.
   },
 
   getAuth: (): AuthState => {

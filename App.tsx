@@ -57,9 +57,9 @@ const formatTime = (seconds: number) => {
 const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthState>(() => storageService.getAuth());
   const [tracks, setTracks] = useState<Track[]>([]);
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
-  const [allUsers, setAllUsers] = useState<User[]>(storageService.getUsers());
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [isLoadingTracks, setIsLoadingTracks] = useState(true);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [view, setView] = useState<'home' | 'upload' | 'admin' | 'profile' | 'settings' | 'playlist' | 'library' | 'moderation'>('home');
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -94,16 +94,38 @@ const App: React.FC = () => {
   const [globalTracks, setGlobalTracks] = useState<Track[]>([]);
   const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
 
+  // Load Cloud Data on startup and every 30 seconds
   useEffect(() => {
-    const loadData = async () => {
-      setIsLoadingTracks(true);
-      const storedTracks = await storageService.getTracks();
-      setTracks(storedTracks);
-      setAllUsers(storageService.getUsers());
-      setIsLoadingTracks(false);
+    const syncData = async (silent = false) => {
+      if (!silent) setIsLoadingTracks(true);
+      setIsSyncing(true);
+      try {
+        const remote = await storageService.getRemoteData();
+        setTracks(remote.tracks);
+        setAllUsers(remote.users);
+        
+        // If current user is logged in, refresh their local data from cloud
+        if (auth.user) {
+          const freshUser = remote.users.find(u => u.id === auth.user?.id);
+          if (freshUser) {
+            const newAuth = { ...auth, user: freshUser };
+            setAuth(newAuth);
+            storageService.setAuth(newAuth);
+          }
+        }
+      } catch (e) {
+        console.error("Cloud Sync Failed", e);
+      } finally {
+        setIsLoadingTracks(false);
+        setIsSyncing(false);
+      }
     };
-    loadData();
+
+    syncData();
     fetchGlobalDiscovery();
+
+    const interval = setInterval(() => syncData(true), 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchGlobalDiscovery = async () => {
@@ -204,42 +226,41 @@ const App: React.FC = () => {
     }
   }, [nowPlaying]);
 
-  const handleAuth = (e: React.FormEvent) => {
+  const handleAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsAuthenticating(true);
-    setTimeout(() => {
-      const users = storageService.getUsers();
-      const normalizedUsername = loginUsername.toLowerCase().trim();
-      const isEletro = normalizedUsername === 'eletro';
+    
+    const remote = await storageService.getRemoteData();
+    const normalizedUsername = loginUsername.toLowerCase().trim();
+    const isEletro = normalizedUsername === 'eletro';
 
-      if (authMode === 'login') {
-        let user = users.find(u => u.username.toLowerCase() === normalizedUsername);
-        if (user) {
-          if (isEletro) {
-            user.isDeveloper = true;
-            user.isAdmin = true;
-          }
-          const newAuth: AuthState = { ...auth, user, isAuthenticated: true };
-          setAuth(newAuth);
-          storageService.setAuth(newAuth);
-          setIsLoginModalOpen(false);
-        } else alert(t.authError);
-      } else {
-        const newUser: User = {
-          id: Math.random().toString(36).substr(2, 9),
-          username: loginUsername,
-          avatar: tempAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${loginUsername}`,
-          isAdmin: isEletro || loginUsername.toLowerCase().includes('admin'),
-          isDeveloper: isEletro,
-          savedTrackIds: [],
-          savedArtistIds: []
-        };
-        storageService.saveUser(newUser);
-        setAuth({ ...auth, user: newUser, isAuthenticated: true });
+    if (authMode === 'login') {
+      let user = remote.users.find(u => u.username.toLowerCase() === normalizedUsername);
+      if (user) {
+        if (isEletro) {
+          user.isDeveloper = true;
+          user.isAdmin = true;
+        }
+        const newAuth: AuthState = { ...auth, user, isAuthenticated: true };
+        setAuth(newAuth);
+        storageService.setAuth(newAuth);
         setIsLoginModalOpen(false);
-      }
-      setIsAuthenticating(false);
-    }, 800);
+      } else alert(t.authError);
+    } else {
+      const newUser: User = {
+        id: Math.random().toString(36).substr(2, 9),
+        username: loginUsername,
+        avatar: tempAvatar || `https://api.dicebear.com/7.x/avataaars/svg?seed=${loginUsername}`,
+        isAdmin: isEletro || loginUsername.toLowerCase().includes('admin'),
+        isDeveloper: isEletro,
+        savedTrackIds: [],
+        savedArtistIds: []
+      };
+      await storageService.saveUser(newUser);
+      setAuth({ ...auth, user: newUser, isAuthenticated: true });
+      setIsLoginModalOpen(false);
+    }
+    setIsAuthenticating(false);
   };
 
   const handleUpload = async (e: React.FormEvent) => {
@@ -260,19 +281,38 @@ const App: React.FC = () => {
       createdAt: Date.now()
     };
     await storageService.saveTrack(newTrack);
-    setTracks(await storageService.getTracks());
+    const updatedTracks = await storageService.getTracks();
+    setTracks(updatedTracks);
     setView('profile');
     setIsUploading(false);
-    // Reset form
     setUploadTitle('');
     setTrackCover(null);
     setTrackAudio(null);
     setIsExplicit(false);
   };
 
+  const handleDeleteTrack = async (id: string) => {
+    setIsSyncing(true);
+    try {
+      await storageService.deleteTrack(id);
+      const updatedTracks = await storageService.getTracks();
+      setTracks(updatedTracks);
+      if (nowPlaying?.id === id) {
+        setNowPlaying(null);
+        audioRef.current?.pause();
+      }
+    } catch (error) {
+      console.error("Failed to delete track", error);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const handleStatusUpdate = async (trackId: string, status: Track['status']) => {
+    setIsSyncing(true);
     const updatedTracks = await storageService.updateTrackStatus(trackId, status);
     setTracks(updatedTracks);
+    setIsSyncing(false);
   };
 
   const filteredTracks = useMemo(() => {
@@ -306,18 +346,20 @@ const App: React.FC = () => {
             <div className="flex flex-col">
                <h1 className="text-xl font-black uppercase italic tracking-tighter leading-none">{APP_NAME}</h1>
                <div className="flex items-center gap-1.5 mt-0.5">
-                  <div className="w-1.5 h-1.5 rounded-full bg-green-300 animate-pulse" />
-                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{t.serverStatus}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-green-300 animate-pulse'}`} />
+                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">
+                    {isSyncing ? 'Syncing...' : t.serverStatus}
+                  </span>
                </div>
             </div>
           </div>
 
           <nav className="hidden md:flex items-center gap-6">
-            <button onClick={() => setView('home')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'home' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.home}</button>
+            <button onClick={() => setView('home')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'home' ? 'opacity-100 underline underline-offset-4' : 'opacity-60 hover:opacity-100'}`}>{t.home}</button>
             {auth.isAuthenticated && (
               <>
-                <button onClick={() => setView('library')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'library' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.library}</button>
-                <button onClick={() => setView('profile')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'profile' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.stage}</button>
+                <button onClick={() => setView('library')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'library' ? 'opacity-100 underline underline-offset-4' : 'opacity-60 hover:opacity-100'}`}>{t.library}</button>
+                <button onClick={() => setView('profile')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'profile' ? 'opacity-100 underline underline-offset-4' : 'opacity-60 hover:opacity-100'}`}>{t.stage}</button>
                 {canModerate && (
                   <button onClick={() => setView('moderation')} className={`text-[10px] font-black uppercase italic transition-opacity flex items-center gap-1.5 ${view === 'moderation' ? 'text-yellow-300' : 'opacity-60 hover:opacity-100'}`}>
                     <ShieldCheck className="w-3 h-3" /> {t.moderation}
@@ -325,7 +367,7 @@ const App: React.FC = () => {
                 )}
               </>
             )}
-            <button onClick={() => setView('settings')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'settings' ? 'opacity-100' : 'opacity-60 hover:opacity-100'}`}>{t.settings}</button>
+            <button onClick={() => setView('settings')} className={`text-[10px] font-black uppercase italic transition-opacity ${view === 'settings' ? 'opacity-100 underline underline-offset-4' : 'opacity-60 hover:opacity-100'}`}>{t.settings}</button>
           </nav>
 
           <div className="flex items-center gap-4">
@@ -367,7 +409,11 @@ const App: React.FC = () => {
                  </h3>
                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
                     {isFetchingGlobal ? <Loader2 className="animate-spin text-red-600 mx-auto" /> : globalTracks.map(track => (
-                      <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} />
+                      <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleDeleteTrack} onToggleSave={async () => {
+                        await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
+                        const updatedTracks = await storageService.getTracks();
+                        setTracks(updatedTracks);
+                      }} />
                     ))}
                  </div>
               </div>
@@ -376,11 +422,20 @@ const App: React.FC = () => {
                  <h3 className="text-4xl font-black uppercase italic mb-8 flex items-center gap-4 text-red-600">
                     <Database className="w-10 h-10" /> {t.topCharts}
                  </h3>
-                 {isLoadingTracks ? <Loader2 className="animate-spin text-red-600 mx-auto" /> : (
+                 {isLoadingTracks ? (
+                   <div className="flex flex-col items-center py-20 opacity-20">
+                      <Loader2 className="animate-spin w-12 h-12 mb-4" />
+                      <p className="font-black uppercase text-xs">Accessing Cloud Node...</p>
+                   </div>
+                 ) : (
                    filteredTracks.length === 0 ? <p className="opacity-30 italic">{t.noTracks}</p> : (
                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
                         {filteredTracks.map(track => (
-                          <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} />
+                          <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleDeleteTrack} onToggleSave={async () => {
+                            await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
+                            const updatedTracks = await storageService.getTracks();
+                            setTracks(updatedTracks);
+                          }} />
                         ))}
                      </div>
                    )
@@ -412,7 +467,8 @@ const App: React.FC = () => {
                     track={track} 
                     isAdmin={canModerate} 
                     onStatusChange={handleStatusUpdate}
-                    onPlay={setNowPlaying} 
+                    onPlay={setNowPlaying}
+                    onDelete={handleDeleteTrack}
                   />
                 ))}
               </div>
@@ -428,11 +484,11 @@ const App: React.FC = () => {
                 <div className="bg-red-600/5 p-8 rounded-[32px] border-2 border-dashed border-red-500/20 relative overflow-hidden">
                    <Cloud className="absolute -bottom-6 -right-6 w-32 h-32 opacity-5 text-red-600" />
                    <div className="flex items-center gap-3 mb-4">
-                      <RefreshCw className="w-6 h-6 text-green-500 animate-spin-slow" />
+                      <RefreshCw className={`w-6 h-6 text-green-500 ${isSyncing ? 'animate-spin' : 'animate-spin-slow'}`} />
                       <h3 className="text-2xl font-black uppercase">{t.autoSyncEnabled}</h3>
                    </div>
-                   <p className="text-xs opacity-50 font-medium italic mb-2">Connected to: vercel.com/ctepan38819-uxs-projects/musijnet</p>
-                   <p className="text-[10px] opacity-40 font-black uppercase tracking-widest">Database persistence across all nodes active.</p>
+                   <p className="text-xs opacity-50 font-medium italic mb-2">Musijnet Cloud Node Status: Online</p>
+                   <p className="text-[10px] opacity-40 font-black uppercase tracking-widest">Universal database persistence enabled.</p>
                 </div>
 
                 <div className="space-y-6">
@@ -464,6 +520,33 @@ const App: React.FC = () => {
           </div>
         )}
 
+        {view === 'library' && (
+          <div className="space-y-12">
+            <h2 className="text-6xl font-black uppercase italic tracking-tighter text-red-600">{t.library}</h2>
+            {filteredTracks.length === 0 ? (
+              <div className="text-center py-20 opacity-30 italic">
+                <Library className="w-16 h-16 mx-auto mb-4" />
+                <p>{t.noTracks}</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
+                {filteredTracks.map(track => (
+                  <TrackCard 
+                    key={track.id} 
+                    track={track} 
+                    onPlay={setNowPlaying} 
+                    onDelete={handleDeleteTrack}
+                    onToggleSave={async () => {
+                      await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
+                      setTracks(await storageService.getTracks());
+                    }} 
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {view === 'profile' && auth.user && (
           <div className="space-y-16">
              <div className="app-card p-12 rounded-[60px] flex flex-col md:flex-row items-center gap-12 relative overflow-hidden">
@@ -492,8 +575,11 @@ const App: React.FC = () => {
                     key={track.id} 
                     track={track} 
                     onPlay={setNowPlaying} 
-                    onDelete={async (id) => { await storageService.deleteTrack(id); setTracks(await storageService.getTracks()); }} 
-                    onToggleSave={() => storageService.toggleSavedTrack(auth.user?.id || '', track.id)} 
+                    onDelete={handleDeleteTrack} 
+                    onToggleSave={async () => {
+                      await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
+                      setTracks(await storageService.getTracks());
+                    }} 
                   />
                 ))}
                 {filteredTracks.length === 0 && <button onClick={() => setView('upload')} className="aspect-square rounded-[40px] border-4 border-dashed border-red-500/20 flex flex-col items-center justify-center gap-4 group hover:border-red-600 transition-all opacity-40 hover:opacity-100">

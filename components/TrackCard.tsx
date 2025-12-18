@@ -29,7 +29,13 @@ const TrackCard: React.FC<TrackCardProps> = ({
   const t = translations[lang as keyof typeof translations];
   const [showConfirm, setShowConfirm] = useState(false);
 
-  const canDelete = auth.user?.isAdmin || auth.user?.id === track.artistId;
+  // Author, Admin, or Developer can delete
+  const canDelete = auth.user && (
+    auth.user.isDeveloper || 
+    auth.user.isAdmin || 
+    auth.user.id === track.artistId
+  );
+  
   const isSaved = auth.user?.savedTrackIds?.includes(track.id);
 
   const statusColors = {
