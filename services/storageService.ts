@@ -6,16 +6,33 @@ const USERS_KEY = 'musijnet_local_users';
 const BUCKET_URL = 'https://kvdb.io/Mo7Xz5P6eE6zVqY1HqNqfU';
 const MANIFEST_KEY = 'musijnet_manifest_v3';
 
+// Helper for fetch with timeout
+const fetchWithTimeout = async (url: string, options: any = {}, timeout = 15000) => {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(url, {
+      ...options,
+      signal: controller.signal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (e) {
+    clearTimeout(id);
+    throw e;
+  }
+};
+
 export const storageService = {
-  // Remote Fetching with robust options
   getRemoteManifest: async (): Promise<{ tracks: Track[], users: User[] }> => {
     try {
-      const response = await fetch(`${BUCKET_URL}/${MANIFEST_KEY}`, {
+      const response = await fetchWithTimeout(`${BUCKET_URL}/${MANIFEST_KEY}`, {
+        method: 'GET',
         mode: 'cors',
-        credentials: 'omit'
+        cache: 'no-store'
       });
       if (response.status === 404) return { tracks: [], users: [] };
-      if (!response.ok) throw new Error('Cloud manifest offline');
+      if (!response.ok) throw new Error('Сервер манифеста недоступен');
       const text = await response.text();
       return text ? JSON.parse(text) : { tracks: [], users: [] };
     } catch (e) {
@@ -32,51 +49,51 @@ export const storageService = {
   saveRemoteManifest: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
     const cleanTracks = data.tracks.map(t => ({ 
       ...t, 
-      audioFile: '', // Never store audio in manifest
-      // Keep cover image but maybe check size?
+      audioFile: '', 
     }));
     
     try {
-      const response = await fetch(`${BUCKET_URL}/${MANIFEST_KEY}`, {
+      const response = await fetchWithTimeout(`${BUCKET_URL}/${MANIFEST_KEY}`, {
         method: 'PUT',
         mode: 'cors',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tracks: cleanTracks, users: data.users }),
       });
-      if (!response.ok) throw new Error(`Manifest save error: ${response.status}`);
+      if (!response.ok) throw new Error(`Ошибка сохранения: ${response.status}`);
       
       localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(cleanTracks));
       localStorage.setItem('musijnet_fallback_users', JSON.stringify(data.users));
     } catch (err) {
       console.error("Failed to save manifest", err);
-      throw new Error("Ошибка синхронизации списка песен.");
+      throw new Error("Ошибка синхронизации базы данных.");
     }
   },
 
   saveAudioBlob: async (trackId: string, audioData: string): Promise<void> => {
     try {
-      const response = await fetch(`${BUCKET_URL}/audio_${trackId}`, {
+      const response = await fetchWithTimeout(`${BUCKET_URL}/audio_${trackId}`, {
         method: 'PUT',
         mode: 'cors',
-        headers: { 'Content-Type': 'text/plain' }, // Send as plain text for max compatibility
+        headers: { 'Content-Type': 'text/plain' },
         body: audioData,
-      });
+      }, 30000); // 30s for audio upload
       
       if (!response.ok) {
-        if (response.status === 413) throw new Error('Файл слишком велик для облака (лимит 1.5MB)');
+        if (response.status === 413) throw new Error('Файл превышает лимит сервера (1МБ)');
         throw new Error(`Ошибка сервера: ${response.status}`);
       }
-    } catch (err) {
-      if (err instanceof TypeError && err.message === 'Failed to fetch') {
-        throw new Error("Ошибка сети: файл слишком велик или сервер недоступен.");
-      }
+    } catch (err: any) {
+      if (err.name === 'AbortError') throw new Error("Время ожидания истекло. Файл слишком большой?");
+      if (err instanceof TypeError) throw new Error("Ошибка сети: проверьте подключение или размер файла (лимит 1МБ).");
       throw err;
     }
   },
 
   getAudioBlob: async (trackId: string): Promise<string> => {
-    const response = await fetch(`${BUCKET_URL}/audio_${trackId}`, {
-      mode: 'cors'
+    const response = await fetchWithTimeout(`${BUCKET_URL}/audio_${trackId}`, {
+      method: 'GET',
+      mode: 'cors',
+      cache: 'no-store'
     });
     if (!response.ok) throw new Error('Аудио не найдено на сервере');
     return await response.text();
@@ -89,12 +106,17 @@ export const storageService = {
 
   saveUser: async (user: User) => {
     const remote = await storageService.getRemoteManifest();
-    if (!remote.users.find(u => u.id === user.id)) {
+    const existing = remote.users.findIndex(u => u.id === user.id);
+    if (existing === -1) {
       remote.users.push(user);
-      await storageService.saveRemoteManifest(remote);
+    } else {
+      remote.users[existing] = user;
     }
+    await storageService.saveRemoteManifest(remote);
+    
     const localUsers = storageService.getUsers();
-    localUsers.push(user);
+    const lIdx = localUsers.findIndex(u => u.id === user.id);
+    if (lIdx === -1) localUsers.push(user); else localUsers[lIdx] = user;
     localStorage.setItem(USERS_KEY, JSON.stringify(localUsers));
   },
 
@@ -104,9 +126,9 @@ export const storageService = {
   },
 
   saveTrack: async (track: Track): Promise<void> => {
-    // 1. Save audio first (the heavy part)
+    // 1. Save audio first
     await storageService.saveAudioBlob(track.id, track.audioFile);
-    // 2. Then save metadata to manifest
+    // 2. Then save to manifest
     const remote = await storageService.getRemoteManifest();
     remote.tracks.push(track);
     await storageService.saveRemoteManifest(remote);
