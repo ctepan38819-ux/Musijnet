@@ -13,7 +13,7 @@ export const translations = {
     chartsSub: "Unsigned artists. Real music.",
     interfaceTheme: "Interface Theme",
     language: "Language",
-    version: "musijnet version 3.9.0 • Core Red",
+    version: "musijnet version 4.0.0 • Cloud Red",
     dropTrack: "Drop Your Track",
     addCover: "Add Cover Art",
     trackTitle: "Track Title",
@@ -81,7 +81,18 @@ export const translations = {
     score: "Score",
     gameOver: "GAME OVER",
     restart: "Restart",
-    followedArtists: "Followed Artists"
+    followedArtists: "Followed Artists",
+    cloudSync: "Musijnet Cloud Sync",
+    generateSyncKey: "Generate Cloud Key",
+    linkDevice: "Link Another Device",
+    syncKeyDesc: "Use this key to sync your music and artists across devices.",
+    enterSyncKey: "Enter your Cloud Sync Key",
+    applySync: "Restore Cloud Data",
+    syncSuccess: "Cloud Data Restored! Reloading...",
+    syncError: "Invalid Sync Key. Check it and try again.",
+    globalDiscovery: "Global Feed (AI Powered)",
+    copyKey: "Copy Key",
+    copied: "Copied!"
   },
   ru: {
     home: "Главная",
@@ -96,7 +107,7 @@ export const translations = {
     chartsSub: "Независимые артисты. Настоящая музыка.",
     interfaceTheme: "Тема интерфейса",
     language: "Язык",
-    version: "musijnet версия 3.9.0 • Core Red",
+    version: "musijnet версия 4.0.0 • Cloud Red",
     dropTrack: "Твой новый трек",
     addCover: "Добавить обложку",
     trackTitle: "Название трека",
@@ -164,6 +175,17 @@ export const translations = {
     score: "Счет",
     gameOver: "ИГРА ОКОНЧЕНА",
     restart: "Заново",
-    followedArtists: "Подписки"
+    followedArtists: "Подписки",
+    cloudSync: "Musijnet Облачная Синхронизация",
+    generateSyncKey: "Создать Облачный Ключ",
+    linkDevice: "Привязать Другое Устройство",
+    syncKeyDesc: "Используйте этот ключ для синхронизации музыки и артистов между устройствами.",
+    enterSyncKey: "Введите Облачный Ключ",
+    applySync: "Восстановить Данные из Облака",
+    syncSuccess: "Данные из Облака Восстановлены! Перезагрузка...",
+    syncError: "Неверный Ключ Синхронизации. Проверьте его и попробуйте снова.",
+    globalDiscovery: "Мировой поток (на базе ИИ)",
+    copyKey: "Копировать Ключ",
+    copied: "Скопировано!"
   }
 };

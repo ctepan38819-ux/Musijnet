@@ -1,5 +1,5 @@
 
-import { User, Track, AuthState, Playlist } from '../types';
+import { User, Track, AuthState, Playlist, SyncData } from '../types';
 
 const USERS_KEY = 'musijnet_users';
 const AUTH_KEY = 'musijnet_session';
@@ -179,6 +179,54 @@ export const storageService = {
       request.onsuccess = () => resolve();
       request.onerror = () => reject(request.error);
     });
+  },
+
+  // Cloud Sync Logic
+  exportCloudData: async (): Promise<string> => {
+    const users = storageService.getUsers();
+    const tracks = await storageService.getTracks();
+    const playlists = await storageService.getPlaylists();
+    
+    const data: SyncData = {
+      users,
+      tracks,
+      playlists,
+      timestamp: Date.now()
+    };
+    
+    return btoa(JSON.stringify(data));
+  },
+
+  importCloudData: async (syncKey: string): Promise<boolean> => {
+    try {
+      const decoded = JSON.parse(atob(syncKey)) as SyncData;
+      if (!decoded.users || !decoded.tracks) return false;
+      
+      // Save users to localStorage
+      localStorage.setItem(USERS_KEY, JSON.stringify(decoded.users));
+      
+      // Save tracks/playlists to IndexedDB
+      const db = await initDB();
+      
+      // Clear current stores first
+      const clearTracks = db.transaction(TRACKS_STORE, 'readwrite').objectStore(TRACKS_STORE).clear();
+      const clearPlaylists = db.transaction(PLAYLISTS_STORE, 'readwrite').objectStore(PLAYLISTS_STORE).clear();
+      
+      await new Promise(r => clearTracks.onsuccess = r);
+      await new Promise(r => clearPlaylists.onsuccess = r);
+      
+      // Batch save
+      const trackTx = db.transaction(TRACKS_STORE, 'readwrite');
+      decoded.tracks.forEach(t => trackTx.objectStore(TRACKS_STORE).put(t));
+      
+      const playlistTx = db.transaction(PLAYLISTS_STORE, 'readwrite');
+      decoded.playlists.forEach(p => playlistTx.objectStore(PLAYLISTS_STORE).put(p));
+      
+      return true;
+    } catch (e) {
+      console.error("Sync Error:", e);
+      return false;
+    }
   },
 
   getAuth: (): AuthState => {

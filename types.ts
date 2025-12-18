@@ -44,3 +44,10 @@ export interface AuthState {
   theme: AppTheme;
   language: AppLanguage;
 }
+
+export interface SyncData {
+  users: User[];
+  tracks: Track[];
+  playlists: Playlist[];
+  timestamp: number;
+}

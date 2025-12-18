@@ -4,6 +4,7 @@ import { User, Track, AuthState, AppTheme, AppLanguage, Playlist, ReleaseType } 
 import { storageService } from './services/storageService';
 import { Logo, APP_NAME } from './constants';
 import { translations } from './translations';
+import { GoogleGenAI } from "@google/genai";
 import { 
   Upload, 
   LogOut, 
@@ -33,7 +34,11 @@ import {
   UserMinus,
   Sparkles,
   Library,
-  Heart
+  Heart,
+  Cloud,
+  Key,
+  ClipboardCheck,
+  Globe
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
@@ -78,6 +83,11 @@ const App: React.FC = () => {
   const [isAddToPlaylistModalOpen, setIsAddToPlaylistModalOpen] = useState(false);
   const [trackToAdd, setTrackToAdd] = useState<string | null>(null);
 
+  // Cloud Sync
+  const [syncKey, setSyncKey] = useState('');
+  const [inputSyncKey, setInputSyncKey] = useState('');
+  const [isKeyCopied, setIsKeyCopied] = useState(false);
+
   // Secret Game
   const [isSecretGameOpen, setIsSecretGameOpen] = useState(false);
   const keySequence = useRef<string>('');
@@ -87,6 +97,10 @@ const App: React.FC = () => {
   const trackAudioRef = useRef<HTMLInputElement>(null);
 
   const t = translations[auth.language];
+
+  // Global Discovery simulation with Gemini
+  const [globalTracks, setGlobalTracks] = useState<Track[]>([]);
+  const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
 
   // Load data and Sync Session
   useEffect(() => {
@@ -121,7 +135,41 @@ const App: React.FC = () => {
 
     syncSession();
     loadInitialData();
+    fetchGlobalDiscovery();
   }, []);
+
+  const fetchGlobalDiscovery = async () => {
+    setIsFetchingGlobal(true);
+    try {
+      const ai = new GoogleGenAI({ apiKey: (process.env as any).API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: 'Generate a list of 5 fictional, professional trending music track names and artist names for a global music platform. Return strictly as JSON array with "title" and "artistName" fields.'
+      });
+      const text = response.text || '[]';
+      const cleanJson = text.match(/\[.*\]/s)?.[0] || '[]';
+      const rawDiscovery = JSON.parse(cleanJson);
+      
+      const mockedGlobal: Track[] = rawDiscovery.map((d: any, i: number) => ({
+        id: `global-${i}`,
+        title: d.title,
+        artistId: `global-artist-${i}`,
+        artistName: d.artistName,
+        artistAvatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${d.artistName}`,
+        coverImage: `https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=400&q=80&sig=${i}`,
+        audioFile: '', // Placeholders
+        isExplicit: false,
+        releaseType: i % 2 === 0 ? 'single' : 'album',
+        status: 'approved',
+        createdAt: Date.now() - (i * 1000000)
+      }));
+      setGlobalTracks(mockedGlobal);
+    } catch (e) {
+      console.error("Global discovery fail:", e);
+    } finally {
+      setIsFetchingGlobal(false);
+    }
+  };
 
   // Easter Egg Listener
   useEffect(() => {
@@ -161,19 +209,23 @@ const App: React.FC = () => {
   useEffect(() => {
     if (nowPlaying) {
       if (!audioRef.current) audioRef.current = new Audio();
-      if (audioRef.current.src !== nowPlaying.audioFile) {
+      if (audioRef.current.src !== nowPlaying.audioFile && nowPlaying.audioFile) {
         audioRef.current.src = nowPlaying.audioFile;
       }
-      audioRef.current.play().catch(() => {});
-      setIsPlaying(true);
+      if (nowPlaying.audioFile) {
+        audioRef.current.play().catch(() => {});
+        setIsPlaying(true);
+      } else {
+        alert("Audio file not found (Global tracks are preview placeholders)");
+      }
 
       const updateTime = () => setCurrentTime(audioRef.current?.currentTime || 0);
       const updateDuration = () => setDuration(audioRef.current?.duration || 0);
       const handleEnded = () => setIsPlaying(false);
 
-      audioRef.current.addEventListener('timeupdate', updateTime);
-      audioRef.current.addEventListener('loadedmetadata', updateDuration);
-      audioRef.current.addEventListener('ended', handleEnded);
+      audioRef.current?.addEventListener('timeupdate', updateTime);
+      audioRef.current?.addEventListener('loadedmetadata', updateDuration);
+      audioRef.current?.addEventListener('ended', handleEnded);
 
       return () => {
         audioRef.current?.removeEventListener('timeupdate', updateTime);
@@ -316,35 +368,6 @@ const App: React.FC = () => {
     }
   };
 
-  const handleCreatePlaylist = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newPlaylistTitle || !auth.user) return;
-    const newP: Playlist = {
-      id: Math.random().toString(36).substr(2, 9),
-      title: newPlaylistTitle,
-      ownerId: auth.user.id,
-      trackIds: [],
-      isVisible: newPlaylistVisible,
-      createdAt: Date.now()
-    };
-    await storageService.savePlaylist(newP);
-    setPlaylists(await storageService.getPlaylists());
-    setNewPlaylistTitle('');
-    setIsPlaylistModalOpen(false);
-  };
-
-  const addTrackToPlaylist = async (playlistId: string) => {
-    if (!trackToAdd) return;
-    const playlist = playlists.find(p => p.id === playlistId);
-    if (playlist && !playlist.trackIds.includes(trackToAdd)) {
-      playlist.trackIds.push(trackToAdd);
-      await storageService.savePlaylist(playlist);
-      setPlaylists(await storageService.getPlaylists());
-    }
-    setIsAddToPlaylistModalOpen(false);
-    setTrackToAdd(null);
-  };
-
   const handleToggleSaveTrack = (trackId: string) => {
     if (!auth.user) return;
     storageService.toggleSavedTrack(auth.user.id, trackId);
@@ -357,6 +380,21 @@ const App: React.FC = () => {
     storageService.toggleSavedArtist(auth.user.id, artistId);
     setAuth(storageService.getAuth());
     setAllUsers(storageService.getUsers());
+  };
+
+  const handleGenerateCloudKey = async () => {
+    const key = await storageService.exportCloudData();
+    setSyncKey(key);
+  };
+
+  const handleApplySync = async () => {
+    const success = await storageService.importCloudData(inputSyncKey);
+    if (success) {
+      alert(t.syncSuccess);
+      window.location.reload();
+    } else {
+      alert(t.syncError);
+    }
   };
 
   const handleUserRoleToggle = (userId: string, currentIsAdmin: boolean) => {
@@ -399,6 +437,8 @@ const App: React.FC = () => {
     }
 
     const artistData = new Map();
+    
+    // Add local tracked artists
     baseTracks.forEach(t => {
       if (!artistData.has(t.artistId)) {
         const fullUser = allUsers.find(u => u.id === t.artistId);
@@ -412,8 +452,8 @@ const App: React.FC = () => {
       }
     });
 
-    // Add followed artists to the artist list if in Home or Search
-    if ((view === 'home' || q) && auth.user?.savedArtistIds) {
+    // Add followed artists to the artist list
+    if (auth.user?.savedArtistIds) {
       auth.user.savedArtistIds.forEach(id => {
         if (!artistData.has(id)) {
           const u = allUsers.find(user => user.id === id);
@@ -508,33 +548,28 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {(view === 'home' || view === 'profile' || view === 'playlist' || view === 'library') && (
-        <div className="bg-red-600/5 py-8 border-b border-red-500/10 mb-8">
-          <div className="max-w-4xl mx-auto px-4">
-            <div className="relative group">
-               <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
-                  <Search className="w-6 h-6 opacity-30 group-focus-within:opacity-100 group-focus-within:text-red-600 transition-all" />
-               </div>
-               <input 
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={t.search}
-                className="w-full pl-16 pr-6 py-6 rounded-[32px] app-card font-black text-xl outline-none focus:ring-8 ring-red-500/10 transition-all placeholder-red-900/20"
-               />
-               {searchQuery && (
-                 <button onClick={() => setSearchQuery('')} className="absolute inset-y-0 right-6 flex items-center p-2 opacity-40 hover:opacity-100"><X className="w-6 h-6" /></button>
-               )}
-            </div>
-          </div>
-        </div>
-      )}
-
       <main className="max-w-6xl mx-auto px-4 py-8 flex-1 w-full">
         {isLoadingTracks ? (
           <div className="flex items-center justify-center py-40"><Loader2 className="w-12 h-12 text-red-600 animate-spin" /></div>
         ) : (view === 'home' || view === 'playlist' || view === 'library') ? (
           <section>
+            <div className="bg-red-600/5 py-8 border-b border-red-500/10 mb-12 rounded-[40px] px-8">
+              <div className="max-w-4xl mx-auto">
+                <div className="relative group">
+                   <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
+                      <Search className="w-6 h-6 opacity-30 group-focus-within:opacity-100 group-focus-within:text-red-600 transition-all" />
+                   </div>
+                   <input 
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder={t.search}
+                    className="w-full pl-16 pr-6 py-6 rounded-[32px] app-card font-black text-xl outline-none focus:ring-8 ring-red-500/10 transition-all placeholder-red-900/20"
+                   />
+                </div>
+              </div>
+            </div>
+
             <div className="mb-12 flex flex-col md:flex-row items-center justify-between gap-6">
               <div className="text-center md:text-left">
                 <h2 className="text-6xl font-black italic uppercase tracking-tighter mb-4" style={{ color: 'var(--accent-red)' }}>
@@ -553,32 +588,7 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-16">
-              {filteredData.playlists.length > 0 && (
-                <div>
-                  <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
-                    <ListMusic className="w-8 h-8" /> {t.playlists}
-                  </h3>
-                  <div className="flex gap-6 overflow-x-auto pb-6 -mx-4 px-4 scrollbar-hide">
-                    {filteredData.playlists.map(p => (
-                      <div 
-                        key={p.id} 
-                        onClick={() => { setSelectedPlaylist(p); setView('playlist'); }}
-                        className={`app-card flex-shrink-0 w-48 p-6 rounded-[32px] cursor-pointer group transition-all ${selectedPlaylist?.id === p.id ? 'border-red-600 bg-red-600/5' : ''}`}
-                      >
-                        <div className="w-full aspect-square bg-red-900/10 rounded-2xl flex items-center justify-center mb-4 relative">
-                          <Music className="w-12 h-12 text-red-600/20 group-hover:scale-110 transition-transform" />
-                          <div className="absolute top-2 right-2">
-                             {p.isVisible ? <Eye className="w-4 h-4 opacity-30" /> : <EyeOff className="w-4 h-4 text-red-600" />}
-                          </div>
-                        </div>
-                        <p className="font-black uppercase italic text-sm truncate">{p.title}</p>
-                        <p className="text-[10px] font-bold opacity-30 uppercase mt-1">{p.trackIds.length} {t.songs}</p>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
+              {/* Discover Artists */}
               {filteredData.artists.length > 0 && (view === 'home' || searchQuery) && (
                 <div>
                   <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
@@ -594,7 +604,6 @@ const App: React.FC = () => {
                             {artist.isDeveloper && <Crown className="absolute -top-2 -right-2 w-8 h-8 text-yellow-400 fill-yellow-400 drop-shadow-lg" />}
                             {artist.isAdmin && !artist.isDeveloper && <ShieldCheck className="absolute -top-1 -right-1 w-6 h-6 text-red-600 fill-white" />}
                             
-                            {/* Follow Button */}
                             {auth.isAuthenticated && auth.user?.id !== artist.id && (
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleToggleSaveArtist(artist.id); }}
@@ -606,17 +615,6 @@ const App: React.FC = () => {
                             )}
                           </div>
                           <p className="font-black uppercase italic text-sm truncate">{artist.name}</p>
-                          {auth.user?.isDeveloper && !artist.isDeveloper && (
-                            <div className="mt-4 flex justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                              <button 
-                                onClick={(e) => { e.stopPropagation(); handleUserRoleToggle(artist.id, artist.isAdmin); }}
-                                className={`p-2 rounded-full transition-all ${artist.isAdmin ? 'bg-black/10 text-red-600 hover:bg-red-600 hover:text-white' : 'bg-red-600 text-white hover:scale-110'}`}
-                                title={artist.isAdmin ? t.removeAdmin : t.makeAdmin}
-                              >
-                                {artist.isAdmin ? <UserMinus className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
-                              </button>
-                            </div>
-                          )}
                         </div>
                       );
                     })}
@@ -624,6 +622,21 @@ const App: React.FC = () => {
                 </div>
               )}
 
+              {/* Discovery Feed (Global) */}
+              {view === 'home' && globalTracks.length > 0 && (
+                <div>
+                  <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
+                    <Globe className="w-8 h-8" /> {t.globalDiscovery}
+                  </h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+                    {globalTracks.map(track => (
+                      <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onToggleSave={handleToggleSaveTrack} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Local Songs Section */}
               <div>
                 <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
                   <Music className="w-8 h-8" /> {t.songs}
@@ -647,44 +660,61 @@ const App: React.FC = () => {
               </div>
             </div>
           </section>
-        ) : view === 'moderators' && auth.user?.isDeveloper ? (
-          <section>
-            <h2 className="text-5xl font-black italic uppercase mb-12 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.moderators}</h2>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-12">
-               <div>
-                  <h3 className="text-xl font-black uppercase mb-6 flex items-center gap-3 opacity-50"><ShieldCheck className="w-6 h-6" /> {t.moderatorList}</h3>
-                  <div className="space-y-4">
-                    {moderators.length === 0 ? <p className="italic opacity-30">{t.noModerators}</p> : moderators.map(u => (
-                      <div key={u.id} className="app-card p-4 rounded-2xl flex items-center justify-between">
-                         <div className="flex items-center gap-4">
-                            <img src={u.avatar} className="w-12 h-12 rounded-full border-2 border-red-500/20" alt="" />
-                            <span className="font-black uppercase italic text-lg">{u.username}</span>
-                         </div>
-                         <button onClick={() => handleUserRoleToggle(u.id, true)} className="p-3 bg-red-600/10 text-red-600 hover:bg-red-600 hover:text-white rounded-xl transition-all"><UserMinus className="w-5 h-5" /></button>
-                      </div>
-                    ))}
-                  </div>
-               </div>
-               <div>
-                  <h3 className="text-xl font-black uppercase mb-6 flex items-center gap-3 opacity-50"><UserIcon className="w-6 h-6" /> {t.allUsers}</h3>
-                  <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 scrollbar-hide">
-                    {nonAdminUsers.map(u => (
-                      <div key={u.id} className="app-card p-4 rounded-2xl flex items-center justify-between opacity-70 hover:opacity-100 transition-opacity">
-                         <div className="flex items-center gap-4">
-                            <img src={u.avatar} className="w-12 h-12 rounded-full grayscale hover:grayscale-0 transition-all" alt="" />
-                            <span className="font-black uppercase italic text-sm">{u.username}</span>
-                         </div>
-                         <button onClick={() => handleUserRoleToggle(u.id, false)} className="p-3 bg-red-600 text-white hover:scale-110 rounded-xl transition-all shadow-lg"><UserPlus className="w-5 h-5" /></button>
-                      </div>
-                    ))}
-                  </div>
-               </div>
-            </div>
-          </section>
         ) : view === 'settings' ? (
           <section className="max-w-2xl mx-auto">
             <h2 className="text-5xl font-black uppercase italic mb-12 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.settings}</h2>
             <div className="app-card p-10 rounded-[40px] space-y-12 shadow-2xl">
+              {/* Cloud Sync Section */}
+              <div className="p-8 bg-red-600/5 rounded-3xl border-2 border-dashed border-red-500/20">
+                <h3 className="text-xl font-black uppercase mb-4 flex items-center gap-3"><Cloud className="w-6 h-6" /> {t.cloudSync}</h3>
+                <p className="text-xs opacity-50 mb-6 font-medium">{t.syncKeyDesc}</p>
+                
+                <div className="flex flex-col gap-4">
+                  <button 
+                    onClick={handleGenerateCloudKey}
+                    className="bg-red-600 text-white py-4 rounded-2xl font-black uppercase text-xs shadow-xl hover:scale-[1.02] transition-transform flex items-center justify-center gap-2"
+                  >
+                    <Key className="w-4 h-4" /> {t.generateSyncKey}
+                  </button>
+
+                  {syncKey && (
+                    <div className="relative group">
+                      <input 
+                        type="text" 
+                        readOnly 
+                        value={syncKey} 
+                        className="w-full bg-black/10 border-2 border-red-500/10 p-4 pr-12 rounded-xl font-mono text-[8px] break-all outline-none" 
+                      />
+                      <button 
+                        onClick={() => { navigator.clipboard.writeText(syncKey); setIsKeyCopied(true); setTimeout(() => setIsKeyCopied(false), 2000); }}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 hover:bg-red-600/10 rounded-lg transition-colors"
+                      >
+                        {isKeyCopied ? <ClipboardCheck className="w-4 h-4 text-green-500" /> : <Plus className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="mt-8 pt-8 border-t border-red-500/10">
+                    <h4 className="text-xs font-black uppercase mb-4">{t.linkDevice}</h4>
+                    <div className="flex gap-2">
+                       <input 
+                        type="text" 
+                        value={inputSyncKey}
+                        onChange={(e) => setInputSyncKey(e.target.value)}
+                        placeholder={t.enterSyncKey}
+                        className="flex-1 bg-white/10 border-2 border-red-500/10 rounded-xl p-4 font-mono text-[8px] outline-none"
+                       />
+                       <button 
+                        onClick={handleApplySync}
+                        className="bg-white text-red-600 px-6 rounded-xl font-black uppercase text-[10px] hover:bg-red-50 transition-colors"
+                       >
+                         {t.applySync}
+                       </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <h3 className="text-xl font-black uppercase mb-6 flex items-center gap-3"><Settings className="w-6 h-6" /> {t.interfaceTheme}</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
@@ -692,7 +722,7 @@ const App: React.FC = () => {
                     <button
                       key={themeType}
                       onClick={() => updateTheme(themeType)}
-                      className={`p-6 rounded-3xl border-2 transition-all font-black uppercase text-[10px] flex flex-col items-center gap-4 ${auth.theme === themeType ? 'border-red-600 bg-red-600/10' : 'border-transparent bg-black/5 hover:bg-black/10'}`}
+                      className={`p-6 rounded-3xl border-2 transition-all font-black uppercase text-[10px] flex flex-col items-center gap-4 ${auth.theme === themeType ? 'border-red-600 bg-red-600/10 shadow-xl' : 'border-transparent bg-black/5 hover:bg-black/10'}`}
                     >
                       <div className={`w-12 h-12 rounded-full shadow-2xl ${themeType === 'red-black' ? 'bg-[#080808]' : themeType === 'red-white' ? 'bg-white' : 'bg-gradient-to-br from-[#080808] to-white'}`}></div>
                       {themeType.replace('-', ' ')}
@@ -706,9 +736,6 @@ const App: React.FC = () => {
                    <button onClick={() => updateLanguage('ru')} className={`p-6 rounded-3xl border-2 font-black uppercase text-sm transition-all ${auth.language === 'ru' ? 'border-red-600 bg-red-600/10 shadow-lg' : 'border-transparent bg-black/5'}`}>Русский</button>
                    <button onClick={() => updateLanguage('en')} className={`p-6 rounded-3xl border-2 font-black uppercase text-sm transition-all ${auth.language === 'en' ? 'border-red-600 bg-red-600/10 shadow-lg' : 'border-transparent bg-black/5'}`}>English</button>
                 </div>
-              </div>
-              <div className="pt-8 border-t border-red-500/10 text-[10px] font-black uppercase opacity-30 text-center tracking-[0.2em]">
-                {t.version}
               </div>
             </div>
           </section>
@@ -733,8 +760,8 @@ const App: React.FC = () => {
                 <div>
                    <label className="block text-[10px] font-black uppercase mb-3 opacity-40 tracking-widest">{t.releaseType}</label>
                    <div className="grid grid-cols-2 gap-4">
-                      <button type="button" onClick={() => setUploadReleaseType('single')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'single' ? 'bg-red-600 text-white border-red-400' : 'bg-black/5 border-transparent opacity-50'}`}>{t.single}</button>
-                      <button type="button" onClick={() => setUploadReleaseType('album')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'album' ? 'bg-red-600 text-white border-red-400' : 'bg-black/5 border-transparent opacity-50'}`}>{t.album}</button>
+                      <button type="button" onClick={() => setUploadReleaseType('single')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'single' ? 'bg-red-600 text-white border-red-400 shadow-xl' : 'bg-black/5 border-transparent opacity-50'}`}>{t.single}</button>
+                      <button type="button" onClick={() => setUploadReleaseType('album')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'album' ? 'bg-red-600 text-white border-red-400 shadow-xl' : 'bg-black/5 border-transparent opacity-50'}`}>{t.album}</button>
                    </div>
                 </div>
 
@@ -761,22 +788,6 @@ const App: React.FC = () => {
               </form>
             </div>
            </section>
-        ) : view === 'admin' ? (
-          <section>
-             <h2 className="text-5xl font-black italic uppercase mb-12 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.modRoom}</h2>
-             {filteredData.songs.length === 0 ? (
-                <div className="app-card py-32 rounded-[60px] text-center opacity-30">
-                  <ShieldCheck className="w-20 h-20 mx-auto mb-6" />
-                  <p className="text-3xl font-black uppercase italic tracking-tighter">{t.cleanDesk}</p>
-                </div>
-             ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-                  {filteredData.songs.map(track => (
-                    <TrackCard key={track.id} track={track} isAdmin onStatusChange={handleStatusChange} onDelete={handleTrackDelete} onToggleSave={handleToggleSaveTrack} />
-                  ))}
-                </div>
-             )}
-          </section>
         ) : view === 'profile' ? (
           <section>
             <div className="app-card flex flex-col md:flex-row items-center gap-12 mb-20 p-12 rounded-[60px] shadow-2xl relative overflow-hidden">
@@ -794,7 +805,6 @@ const App: React.FC = () => {
                   ) : (
                     <span className="bg-red-600 text-white px-6 py-2 rounded-full text-xs font-black uppercase italic shadow-2xl">{t.verifiedMusician}</span>
                   )}
-                  {auth.user?.isAdmin && !auth.user?.isDeveloper && <span className="bg-white text-red-600 border border-red-500 px-6 py-2 rounded-full text-xs font-black uppercase italic shadow-2xl">{t.adminOverlord}</span>}
                 </div>
               </div>
               <div className="text-center p-8 bg-black/5 rounded-[32px] border border-red-500/10">
@@ -803,7 +813,6 @@ const App: React.FC = () => {
               </div>
             </div>
 
-            {/* Followed Artists in Profile */}
             {auth.user?.savedArtistIds && auth.user.savedArtistIds.length > 0 && (
               <div className="mb-16">
                  <h3 className="text-3xl font-black italic uppercase mb-8 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.followedArtists}</h3>
@@ -822,21 +831,12 @@ const App: React.FC = () => {
               </div>
             )}
 
-            <h3 className="text-4xl font-black italic uppercase mb-10 tracking-tighter" style={{ color: 'var(--accent-red)' }}>
-              {searchQuery ? t.searchResults : t.myTracks}
-            </h3>
-            {filteredData.songs.length === 0 ? (
-               <div className="text-center py-20 opacity-30 italic">
-                 <p className="text-2xl font-black mb-8 uppercase tracking-tighter">{t.emptyStage}</p>
-                 <button onClick={() => setView('upload')} className="bg-red-600 text-white px-10 py-4 rounded-full font-black uppercase italic shadow-2xl hover:scale-105 transition-transform">{t.firstUpload}</button>
-               </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
-                {filteredData.songs.map(track => (
-                  <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleTrackDelete} onToggleSave={handleToggleSaveTrack} />
-                ))}
-              </div>
-            )}
+            <h3 className="text-4xl font-black italic uppercase mb-10 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.myTracks}</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+              {filteredData.songs.map(track => (
+                <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleTrackDelete} onToggleSave={handleToggleSaveTrack} />
+              ))}
+            </div>
           </section>
         ) : null}
       </main>
@@ -870,66 +870,20 @@ const App: React.FC = () => {
                     <span className="text-[10px] text-white/60 font-black font-mono">{formatTime(duration)}</span>
                  </div>
               </div>
-              <div className="hidden md:flex items-center justify-end gap-6 flex-1">
-                 <button onClick={() => { setNowPlaying(null); audioRef.current?.pause(); }} className="p-3 hover:bg-red-700 text-white rounded-full transition-colors"><X className="w-8 h-8" /></button>
-              </div>
+              <button onClick={() => { setNowPlaying(null); audioRef.current?.pause(); }} className="p-3 hover:bg-red-700 text-white rounded-full transition-colors"><X className="w-8 h-8" /></button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Playlist Creation Modal */}
-      {isPlaylistModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl">
-          <div className="bg-red-600 w-full max-w-md p-10 rounded-[40px] shadow-2xl relative">
-            <button onClick={() => setIsPlaylistModalOpen(false)} className="absolute top-8 right-8 text-white/60 hover:text-white"><X className="w-6 h-6" /></button>
-            <h2 className="text-3xl font-black uppercase italic text-white mb-8 tracking-tighter">{t.createPlaylist}</h2>
-            <form onSubmit={handleCreatePlaylist} className="space-y-6">
-              <div>
-                <label className="block text-[10px] font-black uppercase text-white/60 mb-2 tracking-widest">{t.playlistTitle}</label>
-                <input type="text" required value={newPlaylistTitle} onChange={(e) => setNewPlaylistTitle(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-2xl p-4 font-black text-white outline-none focus:border-white transition-all" />
-              </div>
-              <div className="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
-                 <span className="font-black text-xs text-white uppercase italic">{t.visibility} ({newPlaylistVisible ? t.public : t.private})</span>
-                 <button type="button" onClick={() => setNewPlaylistVisible(!newPlaylistVisible)} className="p-2 bg-white/10 rounded-lg">
-                    {newPlaylistVisible ? <Eye className="text-white w-5 h-5" /> : <EyeOff className="text-white w-5 h-5" />}
-                 </button>
-              </div>
-              <button type="submit" className="w-full bg-white text-red-600 py-4 rounded-2xl font-black uppercase text-xl shadow-2xl hover:scale-105 transition-all">{t.createPlaylist}</button>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Modals & Nav Footers (Standard) */}
+      <footer className="md:hidden fixed bottom-0 left-0 right-0 bg-red-600 border-t-2 border-white/10 px-8 py-6 z-40 flex justify-around text-white">
+          <button onClick={() => setView('home')} className={`p-3 rounded-2xl ${view === 'home' ? 'bg-white/20' : ''}`}><Home className="w-8 h-8" /></button>
+          <button onClick={() => auth.isAuthenticated ? setView('library') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'library' ? 'bg-white/20' : ''}`}><Library className="w-8 h-8" /></button>
+          <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'upload' ? 'bg-white/20' : ''}`}><PlusCircle className="w-8 h-8" /></button>
+          <button onClick={() => setView('settings')} className={`p-3 rounded-2xl ${view === 'settings' ? 'bg-white/20' : ''}`}><Settings className="w-8 h-8" /></button>
+      </footer>
 
-      {/* Add to Playlist Modal */}
-      {isAddToPlaylistModalOpen && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/90 backdrop-blur-xl">
-          <div className="bg-red-600 w-full max-w-md p-10 rounded-[40px] shadow-2xl relative">
-            <button onClick={() => setIsAddToPlaylistModalOpen(false)} className="absolute top-8 right-8 text-white/60 hover:text-white"><X className="w-6 h-6" /></button>
-            <h2 className="text-3xl font-black uppercase italic text-white mb-8 tracking-tighter">{t.addToPlaylist}</h2>
-            <div className="space-y-3 max-h-80 overflow-y-auto pr-2 scrollbar-hide">
-              {playlists.filter(p => p.ownerId === auth.user?.id).map(p => (
-                <button 
-                  key={p.id} 
-                  onClick={() => addTrackToPlaylist(p.id)}
-                  className="w-full p-4 bg-white/10 hover:bg-white/20 rounded-2xl flex items-center justify-between group transition-all"
-                >
-                  <span className="font-black uppercase italic text-white">{p.title}</span>
-                  <Plus className="w-5 h-5 text-white opacity-40 group-hover:opacity-100" />
-                </button>
-              ))}
-              {playlists.filter(p => p.ownerId === auth.user?.id).length === 0 && (
-                <p className="text-white/40 italic text-sm text-center py-4">{t.emptyStage}</p>
-              )}
-            </div>
-            <button onClick={() => { setIsAddToPlaylistModalOpen(false); setIsPlaylistModalOpen(true); }} className="w-full mt-6 py-4 border-2 border-white/20 rounded-2xl text-white font-black uppercase text-xs flex items-center justify-center gap-2">
-              <PlusCircle className="w-4 h-4" /> {t.createPlaylist}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Auth Modal */}
       {isLoginModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/95 backdrop-blur-2xl">
           <div className="bg-red-600 w-full max-w-lg p-12 rounded-[60px] shadow-[0_40px_120px_rgba(220,38,38,0.4)] relative border-t-[8px] border-red-400/30">
@@ -937,28 +891,12 @@ const App: React.FC = () => {
             <div className="text-center mb-10 text-white">
               <Logo className="w-24 h-24 mx-auto mb-6 drop-shadow-[0_0_40px_rgba(255,255,255,0.4)] animate-pulse" />
               <h2 className="text-6xl font-black uppercase italic tracking-tighter leading-none">{t.theRedDoor}</h2>
-              <p className="text-red-100 font-black mt-4 opacity-90 uppercase text-[10px] tracking-[0.3em]">{t.musiciansOnly}</p>
             </div>
             <form onSubmit={handleAuth} className="space-y-4">
-              {authMode === 'register' && (
-                <div className="flex flex-col items-center gap-4 mb-6">
-                  <div onClick={() => fileInputRef.current?.click()} className="w-28 h-28 rounded-full bg-white/10 border-4 border-dashed border-white/30 flex items-center justify-center cursor-pointer hover:bg-white/20 transition-all overflow-hidden relative group">
-                    {tempAvatar ? <img src={tempAvatar} className="w-full h-full object-cover" alt="Profile" /> : <Camera className="text-white/40 w-10 h-10" />}
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity uppercase font-black text-[10px] text-white">Change</div>
-                  </div>
-                  <input type="file" hidden ref={fileInputRef} accept="image/*" onChange={(e) => handleFileChange(e, setTempAvatar)} />
-                </div>
-              )}
-              <div className="relative">
-                <UserIcon className="absolute left-6 top-6 w-6 h-6 text-white/30" />
-                <input type="text" placeholder={t.stageName} required value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 pl-16 font-black text-white outline-none focus:border-white transition-all placeholder-white/30 uppercase italic text-xl" />
-              </div>
-              <div className="relative">
-                <Lock className="absolute left-6 top-6 w-6 h-6 text-white/30" />
-                <input type="password" placeholder={t.password} required value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 pl-16 font-black text-white outline-none focus:border-white transition-all placeholder-white/30 uppercase italic text-xl" />
-              </div>
-              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.05] transition-transform mt-6 flex items-center justify-center gap-3">
-                {isAuthenticating ? <Loader2 className="w-8 h-8 animate-spin" /> : (authMode === 'login' ? t.loginAction : t.registerAction)}
+              <input type="text" placeholder={t.stageName} required value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none focus:border-white transition-all placeholder-white/30 uppercase italic text-xl" />
+              <input type="password" placeholder={t.password} required value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none focus:border-white transition-all placeholder-white/30 uppercase italic text-xl" />
+              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.05] transition-transform mt-6">
+                {isAuthenticating ? <Loader2 className="w-8 h-8 animate-spin mx-auto" /> : (authMode === 'login' ? t.loginAction : t.registerAction)}
               </button>
               <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full text-white text-sm font-black uppercase italic opacity-60 hover:opacity-100 transition-opacity tracking-widest mt-4">
                 {authMode === 'login' ? t.switchToRegister : t.switchToLogin}
@@ -967,13 +905,6 @@ const App: React.FC = () => {
           </div>
         </div>
       )}
-
-      <footer className="md:hidden fixed bottom-0 left-0 right-0 bg-red-600 border-t-2 border-white/10 px-8 py-6 z-40 flex justify-around text-white">
-          <button onClick={() => setView('home')} className={`p-3 rounded-2xl ${view === 'home' ? 'bg-white/20' : ''}`}><Home className="w-8 h-8" /></button>
-          <button onClick={() => auth.isAuthenticated ? setView('library') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'library' ? 'bg-white/20' : ''}`}><Library className="w-8 h-8" /></button>
-          <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'upload' ? 'bg-white/20' : ''}`}><PlusCircle className="w-8 h-8" /></button>
-          <button onClick={() => setView('settings')} className={`p-3 rounded-2xl ${view === 'settings' ? 'bg-white/20' : ''}`}><Settings className="w-8 h-8" /></button>
-      </footer>
     </div>
   );
 };
