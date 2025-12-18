@@ -3,8 +3,9 @@ import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
 const USERS_KEY = 'musijnet_local_users';
-const BUCKET_URL = 'https://kvdb.io/Mo7Xz5P6eE6zVqY1HqNqfU';
-const MANIFEST_KEY = 'musijnet_manifest_v3';
+// Updated to a fresh unique bucket ID for musijnet
+const BUCKET_URL = 'https://kvdb.io/MN_v1_production_node_final';
+const MANIFEST_KEY = 'musijnet_manifest_v5';
 
 // Helper for fetch with timeout
 const fetchWithTimeout = async (url: string, options: any = {}, timeout = 45000) => {
@@ -31,8 +32,9 @@ export const storageService = {
         mode: 'cors',
         cache: 'no-store'
       });
+      // 404 on GET means the database is empty (first initialization)
       if (response.status === 404) return { tracks: [], users: [] };
-      if (!response.ok) throw new Error('Сервер манифеста недоступен');
+      if (!response.ok) throw new Error(`Ошибка сервера: ${response.status}`);
       const text = await response.text();
       return text ? JSON.parse(text) : { tracks: [], users: [] };
     } catch (e) {
@@ -59,17 +61,20 @@ export const storageService = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tracks: cleanTracks, users: data.users }),
       });
-      if (!response.ok) throw new Error(`Ошибка сохранения: ${response.status}`);
+      if (!response.ok) {
+        if (response.status === 404) throw new Error("Сбой хранилища: Конечная точка не найдена (404).");
+        throw new Error(`Ошибка сохранения (${response.status})`);
+      }
       
       localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(cleanTracks));
       localStorage.setItem('musijnet_fallback_users', JSON.stringify(data.users));
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save manifest", err);
-      throw new Error("Ошибка синхронизации базы данных.");
+      throw new Error(err.message || "Ошибка синхронизации базы данных.");
     }
   },
 
-  // Save audio as raw Binary Blob to stay under 1MB limit without Base64 overhead
+  // Binary Blob upload to keep overhead low
   saveAudioBlob: async (trackId: string, audioBlob: Blob): Promise<void> => {
     try {
       const response = await fetchWithTimeout(`${BUCKET_URL}/audio_${trackId}`, {
@@ -77,15 +82,16 @@ export const storageService = {
         mode: 'cors',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: audioBlob,
-      }, 60000); // 60s for binary upload
+      }, 60000);
       
       if (!response.ok) {
         if (response.status === 413) throw new Error('Файл слишком велик (лимит сервера 1МБ)');
+        if (response.status === 404) throw new Error('Ошибка 404: Путь загрузки заблокирован или недоступен.');
         throw new Error(`Ошибка сервера: ${response.status}`);
       }
     } catch (err: any) {
       if (err.name === 'AbortError') throw new Error("Таймаут загрузки. Файл слишком большой для текущей скорости сети.");
-      if (err instanceof TypeError) throw new Error("Сетевая ошибка: сервис заблокировал запрос (возможно, превышен лимит 1МБ).");
+      if (err instanceof TypeError) throw new Error("Сетевая ошибка: сервис заблокировал запрос (проверьте интернет или размер файла).");
       throw err;
     }
   },
@@ -98,7 +104,6 @@ export const storageService = {
     });
     if (!response.ok) throw new Error('Аудио не найдено на сервере');
     
-    // Get binary data and convert back to base64 for the Audio element
     const blob = await response.blob();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -135,9 +140,7 @@ export const storageService = {
   },
 
   saveTrack: async (track: Track, audioBlob: Blob): Promise<void> => {
-    // 1. Save binary audio first
     await storageService.saveAudioBlob(track.id, audioBlob);
-    // 2. Then save metadata to manifest
     const remote = await storageService.getRemoteManifest();
     remote.tracks.push(track);
     await storageService.saveRemoteManifest(remote);

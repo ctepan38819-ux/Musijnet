@@ -26,7 +26,9 @@ import {
   RefreshCw,
   AlertCircle,
   LogOut,
-  ChevronRight
+  ChevronRight,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
@@ -37,7 +39,6 @@ const formatTime = (seconds: number) => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-// For binary upload, we can use almost 1MB.
 const MAX_BINARY_SIZE = 980 * 1024; 
 
 const dataURLtoBlob = (dataurl: string) => {
@@ -89,9 +90,6 @@ const App: React.FC = () => {
 
   const t = translations[auth.language];
 
-  const [globalTracks, setGlobalTracks] = useState<Track[]>([]);
-  const [isFetchingGlobal, setIsFetchingGlobal] = useState(false);
-
   const syncData = async (silent = false) => {
     if (!silent) setIsLoadingTracks(true);
     setIsSyncing(true);
@@ -117,56 +115,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     syncData();
-    fetchGlobalDiscovery();
     const interval = setInterval(() => syncData(true), 60000);
     return () => clearInterval(interval);
   }, []);
-
-  const fetchGlobalDiscovery = async () => {
-    setIsFetchingGlobal(true);
-    try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: 'Generate 5 trending futuristic professional musician names and track titles.',
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                title: { type: Type.STRING },
-                artistName: { type: Type.STRING },
-                genre: { type: Type.STRING }
-              },
-              propertyOrdering: ["title", "artistName", "genre"],
-              required: ["title", "artistName", "genre"]
-            }
-          }
-        }
-      });
-      const data = JSON.parse(response.text || '[]');
-      const mocked: Track[] = data.map((d: any, i: number) => ({
-        id: `srv-${i}`,
-        title: d.title,
-        artistId: `artist-${i}`,
-        artistName: d.artistName,
-        artistAvatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${d.artistName}`,
-        coverImage: `https://images.unsplash.com/photo-1614613535308-eb5fbd3d2c17?w=400&q=80&sig=${i}`,
-        audioFile: '', 
-        isExplicit: i % 3 === 0,
-        releaseType: 'single',
-        status: 'approved',
-        createdAt: Date.now() - i * 1000
-      }));
-      setGlobalTracks(mocked);
-    } catch (e) {
-      console.error("Global fetch failed", e);
-    } finally {
-      setIsFetchingGlobal(false);
-    }
-  };
 
   useEffect(() => {
     const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -276,7 +227,7 @@ const App: React.FC = () => {
       artistName: auth.user.username,
       artistAvatar: auth.user.avatar,
       coverImage: trackCover,
-      audioFile: '', // We don't store it here, it goes to blob storage
+      audioFile: '', 
       isExplicit: isExplicit,
       releaseType: uploadReleaseType,
       status: 'pending',
@@ -295,7 +246,7 @@ const App: React.FC = () => {
       setIsExplicit(false);
       setTrackAudioSize(0);
     } catch (err: any) {
-      setUploadError(err.message || "Ошибка загрузки. Проверьте размер файла.");
+      setUploadError(err.message || "Ошибка загрузки. Проверьте размер файла или статус сервера.");
     } finally {
       setIsUploading(false);
       setUploadStep('');
@@ -399,18 +350,6 @@ const App: React.FC = () => {
 
             <div className="space-y-16">
               <div>
-                 <h3 className="text-4xl font-black uppercase italic mb-8 flex items-center gap-4 text-red-600"><Globe className="w-10 h-10" /> {t.globalDiscovery}</h3>
-                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-6">
-                    {isFetchingGlobal ? <Loader2 className="animate-spin text-red-600 mx-auto" /> : globalTracks.map(track => (
-                      <TrackCard key={track.id} track={track} onPlay={handlePlayTrack} onDelete={handleDeleteTrack} onToggleSave={async () => {
-                        await storageService.toggleSavedTrack(auth.user?.id || '', track.id);
-                        await syncData(true);
-                      }} />
-                    ))}
-                 </div>
-              </div>
-
-              <div>
                  <h3 className="text-4xl font-black uppercase italic mb-8 flex items-center gap-4 text-red-600"><Database className="w-10 h-10" /> {t.topCharts}</h3>
                  {isLoadingTracks ? (
                    <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs">Accessing Cloud Node...</p></div>
@@ -461,7 +400,7 @@ const App: React.FC = () => {
                      <div className="bg-red-600/20 border-2 border-red-600 p-6 rounded-3xl flex items-start gap-3 text-red-600 font-bold text-xs uppercase animate-shake shadow-inner">
                         <AlertCircle className="w-6 h-6 flex-shrink-0" />
                         <div className="flex flex-col gap-1">
-                           <span className="text-sm font-black italic">Ошибка соединения</span>
+                           <span className="text-sm font-black italic">Ошибка подключения (404/500)</span>
                            <span className="opacity-70 leading-relaxed font-medium">{uploadError}</span>
                         </div>
                      </div>
@@ -531,6 +470,10 @@ const App: React.FC = () => {
                    <div className="flex flex-wrap gap-4 justify-center md:justify-start">
                       <span className="bg-red-600 text-white px-8 py-2 rounded-full font-black text-[10px] uppercase italic shadow-xl">{auth.user.isDeveloper ? t.developer : t.verifiedMusician}</span>
                       <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{filteredTracks.length} {t.uploadsCount}</span>
+                      <div className="flex items-center gap-2 bg-white/10 px-4 py-2 rounded-full border border-white/10">
+                        {isSyncing ? <Loader2 className="w-3 h-3 animate-spin" /> : (tracks.length > 0 ? <Wifi className="w-3 h-3 text-green-400" /> : <WifiOff className="w-3 h-3 text-red-400" />)}
+                        <span className="text-[8px] font-black uppercase opacity-60">Node Status: {tracks.length > 0 ? 'Online' : 'Initialize'}</span>
+                      </div>
                    </div>
                 </div>
              </div>
@@ -549,7 +492,7 @@ const App: React.FC = () => {
           </div>
         )}
       </main>
-
+      
       {nowPlaying && (
         <div className="fixed bottom-0 left-0 right-0 z-50 animate-player">
           <div className="bg-red-600 p-6 shadow-2xl border-t-2 border-white/20">
@@ -604,6 +547,7 @@ const App: React.FC = () => {
           <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-4 rounded-2xl transition-all ${view === 'upload' ? 'bg-white/20 scale-110' : 'opacity-60'}`}><PlusCircle className="w-7 h-7" /></button>
           <button onClick={() => setView('settings')} className={`p-4 rounded-2xl transition-all ${view === 'settings' ? 'bg-white/20 scale-110' : 'opacity-60'}`}><Settings className="w-7 h-7" /></button>
       </footer>
+
     </div>
   );
 };
