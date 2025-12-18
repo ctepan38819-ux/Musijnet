@@ -1,0 +1,97 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>musijnet - Music Platform</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #080808; 
+      --card-bg: rgba(220, 38, 38, 0.05);
+      --text-main: #ffffff;
+      --text-sub: #fca5a5;
+      --accent-red: #dc2626;
+      --border-color: rgba(220, 38, 38, 0.2);
+    }
+
+    .theme-red-white {
+      --bg-color: #fcfcfc;
+      --card-bg: rgba(220, 38, 38, 0.03);
+      --text-main: #1a1a1a;
+      --text-sub: #7f1d1d;
+      --accent-red: #dc2626;
+      --border-color: rgba(220, 38, 38, 0.15);
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      transition: background-color 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+      overflow-x: hidden;
+    }
+
+    .app-card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--border-color);
+      backdrop-filter: blur(10px);
+      transition: all 0.3s ease;
+    }
+    
+    .app-card:hover {
+      border-color: var(--accent-red);
+      box-shadow: 0 10px 30px -10px rgba(220, 38, 38, 0.2);
+    }
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: var(--bg-color); }
+    ::-webkit-scrollbar-thumb { background: var(--accent-red); border-radius: 10px; }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      background: transparent;
+      cursor: pointer;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 4px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 2px;
+    }
+    .theme-red-white input[type=range]::-webkit-slider-runnable-track {
+      background: rgba(0,0,0,0.1);
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      height: 14px;
+      width: 14px;
+      border-radius: 50%;
+      background: white;
+      margin-top: -5px;
+      box-shadow: 0 0 15px rgba(220, 38, 38, 0.5);
+    }
+
+    @keyframes slideUp {
+      from { transform: translateY(100%); }
+      to { transform: translateY(0); }
+    }
+    .animate-player { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@^19.2.3",
+      "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
+      "react/": "https://esm.sh/react@^19.2.3/",
+      "lucide-react": "https://esm.sh/lucide-react@^0.562.0"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>

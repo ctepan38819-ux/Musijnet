@@ -1,0 +1,8 @@
+{
+  "name": "musijnet",
+  "description": "A fully red-themed platform for musicians to upload and share music with moderation and age-gating.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
