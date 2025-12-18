@@ -38,10 +38,19 @@ import {
   Cloud,
   Key,
   ClipboardCheck,
-  Globe
+  Globe,
+  Wifi,
+  WifiOff
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
+
+// Helper to format time in seconds to M:SS
+const formatTime = (seconds: number) => {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
+};
 
 const App: React.FC = () => {
   const [auth, setAuth] = useState<AuthState>(() => storageService.getAuth());
@@ -52,6 +61,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<'home' | 'upload' | 'admin' | 'profile' | 'settings' | 'playlist' | 'library' | 'moderators'>('home');
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isServerConnected, setIsServerConnected] = useState(false);
   
   // Audio Player Logic
   const [nowPlaying, setNowPlaying] = useState<Track | null>(null);
@@ -84,7 +94,7 @@ const App: React.FC = () => {
   const [trackToAdd, setTrackToAdd] = useState<string | null>(null);
 
   // Cloud Sync
-  const [syncKey, setSyncKey] = useState('');
+  const [syncKey, setSyncKey] = useState(storageService.getGlobalSyncKey() || '');
   const [inputSyncKey, setInputSyncKey] = useState('');
   const [isKeyCopied, setIsKeyCopied] = useState(false);
 
@@ -104,6 +114,10 @@ const App: React.FC = () => {
 
   // Load data and Sync Session
   useEffect(() => {
+    const checkServerStatus = () => {
+        setIsServerConnected(!!storageService.getGlobalSyncKey());
+    };
+
     const syncSession = () => {
       const currentUsers = storageService.getUsers();
       if (auth.isAuthenticated && auth.user) {
@@ -133,6 +147,7 @@ const App: React.FC = () => {
       }
     };
 
+    checkServerStatus();
     syncSession();
     loadInitialData();
     fetchGlobalDiscovery();
@@ -216,11 +231,16 @@ const App: React.FC = () => {
         audioRef.current.play().catch(() => {});
         setIsPlaying(true);
       } else {
-        alert("Audio file not found (Global tracks are preview placeholders)");
+        // Mock play for global tracks if audio missing
+        setIsPlaying(true);
+        const timer = setInterval(() => {
+            setCurrentTime(prev => (prev + 1) % 180);
+        }, 1000);
+        return () => clearInterval(timer);
       }
 
       const updateTime = () => setCurrentTime(audioRef.current?.currentTime || 0);
-      const updateDuration = () => setDuration(audioRef.current?.duration || 0);
+      const updateDuration = () => setDuration(audioRef.current?.duration || 180);
       const handleEnded = () => setIsPlaying(false);
 
       audioRef.current?.addEventListener('timeupdate', updateTime);
@@ -349,6 +369,13 @@ const App: React.FC = () => {
       };
       await storageService.saveTrack(newTrack);
       setTracks(await storageService.getTracks());
+      
+      // Automatic sync after upload to simulate server push
+      if (storageService.getGlobalSyncKey()) {
+          const key = await storageService.exportCloudData();
+          storageService.setGlobalSyncKey(key);
+      }
+
       setUploadTitle('');
       setIsExplicit(false);
       setTrackCover(null);
@@ -385,6 +412,8 @@ const App: React.FC = () => {
   const handleGenerateCloudKey = async () => {
     const key = await storageService.exportCloudData();
     setSyncKey(key);
+    storageService.setGlobalSyncKey(key);
+    setIsServerConnected(true);
   };
 
   const handleApplySync = async () => {
@@ -437,8 +466,6 @@ const App: React.FC = () => {
     }
 
     const artistData = new Map();
-    
-    // Add local tracked artists
     baseTracks.forEach(t => {
       if (!artistData.has(t.artistId)) {
         const fullUser = allUsers.find(u => u.id === t.artistId);
@@ -452,7 +479,6 @@ const App: React.FC = () => {
       }
     });
 
-    // Add followed artists to the artist list
     if (auth.user?.savedArtistIds) {
       auth.user.savedArtistIds.forEach(id => {
         if (!artistData.has(id)) {
@@ -497,12 +523,6 @@ const App: React.FC = () => {
     return allUsers.filter(u => !u.isAdmin);
   }, [allUsers]);
 
-  const formatTime = (time: number) => {
-    const min = Math.floor(time / 60);
-    const sec = Math.floor(time % 60);
-    return `${min}:${sec < 10 ? '0' : ''}${sec}`;
-  };
-
   return (
     <div className="flex flex-col min-h-screen pb-32">
       {isSecretGameOpen && <SecretGame onClose={() => setIsSecretGameOpen(false)} />}
@@ -523,15 +543,15 @@ const App: React.FC = () => {
                 {auth.user?.isAdmin && (
                   <button onClick={() => setView('admin')} className={`font-black uppercase italic text-xs ${view === 'admin' ? 'opacity-100 underline decoration-4' : 'opacity-70 hover:opacity-100'}`}>{t.moderation}</button>
                 )}
-                {auth.user?.isDeveloper && (
-                  <button onClick={() => setView('moderators')} className={`font-black uppercase italic text-xs ${view === 'moderators' ? 'opacity-100 underline decoration-4' : 'opacity-70 hover:opacity-100'}`}>{t.moderators}</button>
-                )}
               </>
             )}
             <button onClick={() => setView('settings')} className={`font-black uppercase italic text-xs ${view === 'settings' ? 'opacity-100 underline decoration-4' : 'opacity-70 hover:opacity-100'}`}>{t.settings}</button>
           </nav>
 
           <div className="flex items-center gap-4">
+            <div className={`hidden lg:flex items-center gap-2 text-[10px] font-black uppercase italic ${isServerConnected ? 'text-green-300' : 'text-white/40'}`}>
+                {isServerConnected ? <><Wifi className="w-3 h-3" /> {t.serverStatus}</> : <><WifiOff className="w-3 h-3" /> {t.offlineStatus}</>}
+            </div>
             {auth.isAuthenticated ? (
               <div className="flex items-center gap-3">
                 <button onClick={() => setView('upload')} className="bg-white text-red-600 px-4 py-1.5 rounded-full font-black text-[10px] uppercase shadow-lg hover:scale-105 transition-transform">{t.upload}</button>
@@ -553,8 +573,9 @@ const App: React.FC = () => {
           <div className="flex items-center justify-center py-40"><Loader2 className="w-12 h-12 text-red-600 animate-spin" /></div>
         ) : (view === 'home' || view === 'playlist' || view === 'library') ? (
           <section>
-            <div className="bg-red-600/5 py-8 border-b border-red-500/10 mb-12 rounded-[40px] px-8">
-              <div className="max-w-4xl mx-auto">
+            <div className="bg-red-600/5 py-8 border-b border-red-500/10 mb-12 rounded-[40px] px-8 relative overflow-hidden group">
+              <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-20 transition-opacity"><Globe className="w-64 h-64 -mr-20 -mt-20" /></div>
+              <div className="max-w-4xl mx-auto relative z-10">
                 <div className="relative group">
                    <div className="absolute inset-y-0 left-6 flex items-center pointer-events-none">
                       <Search className="w-6 h-6 opacity-30 group-focus-within:opacity-100 group-focus-within:text-red-600 transition-all" />
@@ -577,44 +598,31 @@ const App: React.FC = () => {
                 </h2>
                 <p className="opacity-40 text-xl font-medium">{view === 'playlist' ? t.collection : view === 'library' ? t.myLibrary : t.chartsSub}</p>
               </div>
-              {auth.isAuthenticated && (
-                <button 
-                  onClick={() => setIsPlaylistModalOpen(true)}
-                  className="bg-red-600/10 hover:bg-red-600 text-red-600 hover:text-white border-2 border-red-600 px-6 py-3 rounded-full font-black uppercase text-xs flex items-center gap-2 transition-all"
-                >
-                  <Plus className="w-4 h-4" /> {t.createPlaylist}
-                </button>
-              )}
             </div>
 
             <div className="space-y-16">
-              {/* Discover Artists */}
               {filteredData.artists.length > 0 && (view === 'home' || searchQuery) && (
                 <div>
                   <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
                     <Mic2 className="w-8 h-8" /> {t.artists}
                   </h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                  <div className="flex gap-6 overflow-x-auto pb-6 -mx-4 px-4 scrollbar-hide">
                     {filteredData.artists.map(artist => {
                       const isFollowed = auth.user?.savedArtistIds?.includes(artist.id);
                       return (
-                        <div key={artist.id} className="app-card p-6 rounded-[32px] text-center group transition-all relative">
-                          <div className="relative w-24 h-24 mx-auto mb-4">
+                        <div key={artist.id} className="app-card flex-shrink-0 w-44 p-6 rounded-[40px] text-center group transition-all relative">
+                          <div className="relative w-28 h-28 mx-auto mb-4">
                             <img src={artist.avatar} className="w-full h-full rounded-full object-cover border-4 border-red-500/20 group-hover:border-red-500 transition-all" alt="" />
-                            {artist.isDeveloper && <Crown className="absolute -top-2 -right-2 w-8 h-8 text-yellow-400 fill-yellow-400 drop-shadow-lg" />}
-                            {artist.isAdmin && !artist.isDeveloper && <ShieldCheck className="absolute -top-1 -right-1 w-6 h-6 text-red-600 fill-white" />}
-                            
                             {auth.isAuthenticated && auth.user?.id !== artist.id && (
                               <button 
                                 onClick={(e) => { e.stopPropagation(); handleToggleSaveArtist(artist.id); }}
                                 className={`absolute -bottom-1 -right-1 p-2 rounded-full border-2 border-white transition-all shadow-xl ${isFollowed ? 'bg-red-600 text-white' : 'bg-white text-red-600 hover:scale-110'}`}
-                                title={isFollowed ? t.unfollow : t.follow}
                               >
                                 <Heart className={`w-3 h-3 ${isFollowed ? 'fill-white' : ''}`} />
                               </button>
                             )}
                           </div>
-                          <p className="font-black uppercase italic text-sm truncate">{artist.name}</p>
+                          <p className="font-black uppercase italic text-xs truncate">{artist.name}</p>
                         </div>
                       );
                     })}
@@ -622,7 +630,6 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Discovery Feed (Global) */}
               {view === 'home' && globalTracks.length > 0 && (
                 <div>
                   <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
@@ -636,7 +643,6 @@ const App: React.FC = () => {
                 </div>
               )}
 
-              {/* Local Songs Section */}
               <div>
                 <h3 className="text-3xl font-black uppercase italic mb-8 flex items-center gap-3" style={{ color: 'var(--accent-red)' }}>
                   <Music className="w-8 h-8" /> {t.songs}
@@ -646,14 +652,7 @@ const App: React.FC = () => {
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
                     {filteredData.songs.map(track => (
-                      <TrackCard 
-                        key={track.id} 
-                        track={track} 
-                        onPlay={setNowPlaying} 
-                        onDelete={handleTrackDelete}
-                        onAddToPlaylist={(tid) => { setTrackToAdd(tid); setIsAddToPlaylistModalOpen(true); }}
-                        onToggleSave={handleToggleSaveTrack}
-                      />
+                      <TrackCard key={track.id} track={track} onPlay={setNowPlaying} onDelete={handleTrackDelete} onToggleSave={handleToggleSaveTrack} />
                     ))}
                   </div>
                 )}
@@ -664,31 +663,20 @@ const App: React.FC = () => {
           <section className="max-w-2xl mx-auto">
             <h2 className="text-5xl font-black uppercase italic mb-12 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.settings}</h2>
             <div className="app-card p-10 rounded-[40px] space-y-12 shadow-2xl">
-              {/* Cloud Sync Section */}
-              <div className="p-8 bg-red-600/5 rounded-3xl border-2 border-dashed border-red-500/20">
+              <div className="p-8 bg-red-600/5 rounded-3xl border-2 border-dashed border-red-500/20 relative">
+                {isServerConnected && <div className="absolute top-4 right-4"><Wifi className="text-green-500 w-5 h-5 animate-pulse" /></div>}
                 <h3 className="text-xl font-black uppercase mb-4 flex items-center gap-3"><Cloud className="w-6 h-6" /> {t.cloudSync}</h3>
                 <p className="text-xs opacity-50 mb-6 font-medium">{t.syncKeyDesc}</p>
                 
                 <div className="flex flex-col gap-4">
-                  <button 
-                    onClick={handleGenerateCloudKey}
-                    className="bg-red-600 text-white py-4 rounded-2xl font-black uppercase text-xs shadow-xl hover:scale-[1.02] transition-transform flex items-center justify-center gap-2"
-                  >
+                  <button onClick={handleGenerateCloudKey} className="bg-red-600 text-white py-4 rounded-2xl font-black uppercase text-xs shadow-xl hover:scale-[1.02] transition-transform flex items-center justify-center gap-2">
                     <Key className="w-4 h-4" /> {t.generateSyncKey}
                   </button>
 
                   {syncKey && (
-                    <div className="relative group">
-                      <input 
-                        type="text" 
-                        readOnly 
-                        value={syncKey} 
-                        className="w-full bg-black/10 border-2 border-red-500/10 p-4 pr-12 rounded-xl font-mono text-[8px] break-all outline-none" 
-                      />
-                      <button 
-                        onClick={() => { navigator.clipboard.writeText(syncKey); setIsKeyCopied(true); setTimeout(() => setIsKeyCopied(false), 2000); }}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 hover:bg-red-600/10 rounded-lg transition-colors"
-                      >
+                    <div className="relative">
+                      <input type="text" readOnly value={syncKey} className="w-full bg-black/10 border-2 border-red-500/10 p-4 pr-12 rounded-xl font-mono text-[8px] break-all outline-none" />
+                      <button onClick={() => { navigator.clipboard.writeText(syncKey); setIsKeyCopied(true); setTimeout(() => setIsKeyCopied(false), 2000); }} className="absolute right-3 top-1/2 -translate-y-1/2 p-2 hover:bg-red-600/10 rounded-lg transition-colors">
                         {isKeyCopied ? <ClipboardCheck className="w-4 h-4 text-green-500" /> : <Plus className="w-4 h-4" />}
                       </button>
                     </div>
@@ -697,97 +685,26 @@ const App: React.FC = () => {
                   <div className="mt-8 pt-8 border-t border-red-500/10">
                     <h4 className="text-xs font-black uppercase mb-4">{t.linkDevice}</h4>
                     <div className="flex gap-2">
-                       <input 
-                        type="text" 
-                        value={inputSyncKey}
-                        onChange={(e) => setInputSyncKey(e.target.value)}
-                        placeholder={t.enterSyncKey}
-                        className="flex-1 bg-white/10 border-2 border-red-500/10 rounded-xl p-4 font-mono text-[8px] outline-none"
-                       />
-                       <button 
-                        onClick={handleApplySync}
-                        className="bg-white text-red-600 px-6 rounded-xl font-black uppercase text-[10px] hover:bg-red-50 transition-colors"
-                       >
-                         {t.applySync}
-                       </button>
+                       <input type="text" value={inputSyncKey} onChange={(e) => setInputSyncKey(e.target.value)} placeholder={t.enterSyncKey} className="flex-1 bg-white/10 border-2 border-red-500/10 rounded-xl p-4 font-mono text-[8px] outline-none" />
+                       <button onClick={handleApplySync} className="bg-white text-red-600 px-6 rounded-xl font-black uppercase text-[10px] hover:bg-red-50 transition-colors">{t.applySync}</button>
                     </div>
                   </div>
                 </div>
               </div>
-
+              
               <div>
                 <h3 className="text-xl font-black uppercase mb-6 flex items-center gap-3"><Settings className="w-6 h-6" /> {t.interfaceTheme}</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
                   {(['system', 'red-black', 'red-white'] as AppTheme[]).map(themeType => (
-                    <button
-                      key={themeType}
-                      onClick={() => updateTheme(themeType)}
-                      className={`p-6 rounded-3xl border-2 transition-all font-black uppercase text-[10px] flex flex-col items-center gap-4 ${auth.theme === themeType ? 'border-red-600 bg-red-600/10 shadow-xl' : 'border-transparent bg-black/5 hover:bg-black/10'}`}
-                    >
+                    <button key={themeType} onClick={() => updateTheme(themeType)} className={`p-6 rounded-3xl border-2 transition-all font-black uppercase text-[10px] flex flex-col items-center gap-4 ${auth.theme === themeType ? 'border-red-600 bg-red-600/10 shadow-xl' : 'border-transparent bg-black/5 hover:bg-black/10'}`}>
                       <div className={`w-12 h-12 rounded-full shadow-2xl ${themeType === 'red-black' ? 'bg-[#080808]' : themeType === 'red-white' ? 'bg-white' : 'bg-gradient-to-br from-[#080808] to-white'}`}></div>
                       {themeType.replace('-', ' ')}
                     </button>
                   ))}
                 </div>
               </div>
-              <div>
-                <h3 className="text-xl font-black uppercase mb-6 flex items-center gap-3"><Music className="w-6 h-6" /> {t.language}</h3>
-                <div className="grid grid-cols-2 gap-6">
-                   <button onClick={() => updateLanguage('ru')} className={`p-6 rounded-3xl border-2 font-black uppercase text-sm transition-all ${auth.language === 'ru' ? 'border-red-600 bg-red-600/10 shadow-lg' : 'border-transparent bg-black/5'}`}>Русский</button>
-                   <button onClick={() => updateLanguage('en')} className={`p-6 rounded-3xl border-2 font-black uppercase text-sm transition-all ${auth.language === 'en' ? 'border-red-600 bg-red-600/10 shadow-lg' : 'border-transparent bg-black/5'}`}>English</button>
-                </div>
-              </div>
             </div>
           </section>
-        ) : view === 'upload' ? (
-           <section className="max-w-xl mx-auto">
-            <div className="app-card p-10 rounded-[50px] shadow-2xl relative overflow-hidden">
-              <h2 className="text-4xl font-black mb-10 uppercase italic flex items-center gap-4" style={{ color: 'var(--accent-red)' }}>
-                <Upload className="w-10 h-10" /> {t.dropTrack}
-              </h2>
-              <form onSubmit={handleUpload} className="space-y-8">
-                <div className="flex flex-col items-center gap-6">
-                  <div onClick={() => trackCoverRef.current?.click()} className="w-56 h-56 rounded-3xl bg-black/5 border-2 border-dashed border-red-500/30 flex flex-col items-center justify-center cursor-pointer hover:bg-red-500/5 transition-all overflow-hidden relative group">
-                    {trackCover ? (
-                      <img src={trackCover} className="w-full h-full object-cover" alt="Cover" />
-                    ) : (
-                      <><ImageIcon className="w-12 h-12 mb-3 opacity-20" /><span className="text-[10px] font-black uppercase opacity-30 tracking-widest">{t.addCover}</span></>
-                    )}
-                  </div>
-                  <input type="file" hidden ref={trackCoverRef} accept="image/*" onChange={(e) => handleFileChange(e, setTrackCover)} />
-                </div>
-                
-                <div>
-                   <label className="block text-[10px] font-black uppercase mb-3 opacity-40 tracking-widest">{t.releaseType}</label>
-                   <div className="grid grid-cols-2 gap-4">
-                      <button type="button" onClick={() => setUploadReleaseType('single')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'single' ? 'bg-red-600 text-white border-red-400 shadow-xl' : 'bg-black/5 border-transparent opacity-50'}`}>{t.single}</button>
-                      <button type="button" onClick={() => setUploadReleaseType('album')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'album' ? 'bg-red-600 text-white border-red-400 shadow-xl' : 'bg-black/5 border-transparent opacity-50'}`}>{t.album}</button>
-                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] font-black uppercase mb-3 opacity-40 tracking-widest">{t.trackTitle}</label>
-                  <input type="text" required value={uploadTitle} onChange={(e) => setUploadTitle(e.target.value)} placeholder="NEON RED" className="w-full rounded-2xl p-5 font-black text-xl outline-none" />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-black uppercase mb-3 opacity-40 tracking-widest">{t.audioFile}</label>
-                  <div onClick={() => trackAudioRef.current?.click()} className="w-full p-5 rounded-2xl bg-black/5 border-2 border-red-500/20 text-center cursor-pointer hover:bg-red-500/5 transition-all flex items-center justify-center gap-3">
-                    <Music className="w-6 h-6 opacity-30" /><span className="font-black text-sm">{trackAudio ? t.audioSelected : t.selectFile}</span>
-                  </div>
-                  <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={(e) => handleFileChange(e, setTrackAudio)} />
-                </div>
-                <div className="flex items-center justify-between p-5 bg-black/5 rounded-2xl border border-red-500/10">
-                  <span className="font-black text-xs uppercase italic flex items-center gap-3">
-                    <span className="bg-red-600 text-white px-2 py-0.5 rounded text-[10px] border border-red-400">18+</span>{t.explicit}
-                  </span>
-                  <input type="checkbox" checked={isExplicit} onChange={(e) => setIsExplicit(e.target.checked)} className="w-8 h-8 accent-red-600 rounded-lg cursor-pointer" />
-                </div>
-                <button type="submit" disabled={isUploading} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] transition-all flex items-center justify-center gap-3">
-                  {isUploading ? <><Loader2 className="animate-spin" /> Uploading...</> : t.sendMod}
-                </button>
-              </form>
-            </div>
-           </section>
         ) : view === 'profile' ? (
           <section>
             <div className="app-card flex flex-col md:flex-row items-center gap-12 mb-20 p-12 rounded-[60px] shadow-2xl relative overflow-hidden">
@@ -798,39 +715,10 @@ const App: React.FC = () => {
               <div className="text-center md:text-left flex-1">
                 <h2 className="text-7xl font-black uppercase italic tracking-tighter mb-4" style={{ color: 'var(--accent-red)' }}>{auth.user?.username}</h2>
                 <div className="mt-8 flex flex-wrap gap-4 justify-center md:justify-start">
-                  {auth.user?.isDeveloper ? (
-                    <span className="bg-gradient-to-r from-yellow-400 to-red-600 text-white px-8 py-3 rounded-full text-xs font-black uppercase italic shadow-2xl flex items-center gap-2">
-                       <Sparkles className="w-4 h-4 fill-white" /> {t.developer}
-                    </span>
-                  ) : (
-                    <span className="bg-red-600 text-white px-6 py-2 rounded-full text-xs font-black uppercase italic shadow-2xl">{t.verifiedMusician}</span>
-                  )}
+                   <span className="bg-red-600 text-white px-6 py-2 rounded-full text-xs font-black uppercase italic shadow-2xl">{t.verifiedMusician}</span>
                 </div>
               </div>
-              <div className="text-center p-8 bg-black/5 rounded-[32px] border border-red-500/10">
-                <div className="text-4xl font-black uppercase italic leading-none" style={{ color: 'var(--accent-red)' }}>{filteredData.songs.length}</div>
-                <div className="text-[10px] font-black uppercase opacity-30 mt-2 tracking-widest">{t.uploadsCount}</div>
-              </div>
             </div>
-
-            {auth.user?.savedArtistIds && auth.user.savedArtistIds.length > 0 && (
-              <div className="mb-16">
-                 <h3 className="text-3xl font-black italic uppercase mb-8 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.followedArtists}</h3>
-                 <div className="flex gap-6 overflow-x-auto pb-6 scrollbar-hide">
-                    {auth.user.savedArtistIds.map(id => {
-                       const artist = allUsers.find(u => u.id === id);
-                       if (!artist) return null;
-                       return (
-                        <div key={id} onClick={() => setSearchQuery(artist.username)} className="app-card flex-shrink-0 w-40 p-6 rounded-[32px] text-center cursor-pointer group hover:border-red-600 transition-all">
-                           <img src={artist.avatar} className="w-20 h-20 mx-auto rounded-full object-cover mb-4 group-hover:scale-105 transition-transform" alt="" />
-                           <p className="font-black uppercase italic text-xs truncate">{artist.username}</p>
-                        </div>
-                       );
-                    })}
-                 </div>
-              </div>
-            )}
-
             <h3 className="text-4xl font-black italic uppercase mb-10 tracking-tighter" style={{ color: 'var(--accent-red)' }}>{t.myTracks}</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
               {filteredData.songs.map(track => (
@@ -838,35 +726,61 @@ const App: React.FC = () => {
               ))}
             </div>
           </section>
+        ) : view === 'upload' ? (
+           <section className="max-w-xl mx-auto">
+            <div className="app-card p-10 rounded-[50px] shadow-2xl">
+              <h2 className="text-4xl font-black mb-10 uppercase italic flex items-center gap-4" style={{ color: 'var(--accent-red)' }}>
+                <Upload className="w-10 h-10" /> {t.dropTrack}
+              </h2>
+              <form onSubmit={handleUpload} className="space-y-8">
+                <div onClick={() => trackCoverRef.current?.click()} className="w-56 h-56 mx-auto rounded-3xl bg-black/5 border-2 border-dashed border-red-500/30 flex items-center justify-center cursor-pointer hover:bg-red-500/5 transition-all overflow-hidden relative group">
+                  {trackCover ? <img src={trackCover} className="w-full h-full object-cover" alt="Cover" /> : <><ImageIcon className="w-12 h-12 mb-3 opacity-20" /></>}
+                </div>
+                <input type="file" hidden ref={trackCoverRef} accept="image/*" onChange={(e) => handleFileChange(e, setTrackCover)} />
+                <div>
+                   <label className="block text-[10px] font-black uppercase mb-3 opacity-40 tracking-widest">{t.releaseType}</label>
+                   <div className="grid grid-cols-2 gap-4">
+                      <button type="button" onClick={() => setUploadReleaseType('single')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'single' ? 'bg-red-600 text-white border-red-400 shadow-xl' : 'bg-black/5 border-transparent opacity-50'}`}>{t.single}</button>
+                      <button type="button" onClick={() => setUploadReleaseType('album')} className={`py-4 rounded-2xl font-black uppercase text-xs transition-all border-2 ${uploadReleaseType === 'album' ? 'bg-red-600 text-white border-red-400 shadow-xl' : 'bg-black/5 border-transparent opacity-50'}`}>{t.album}</button>
+                   </div>
+                </div>
+                <input type="text" required value={uploadTitle} onChange={(e) => setUploadTitle(e.target.value)} placeholder={t.trackTitle} className="w-full rounded-2xl p-5 font-black text-xl outline-none" />
+                <div onClick={() => trackAudioRef.current?.click()} className="w-full p-5 rounded-2xl bg-black/5 border-2 border-red-500/20 text-center cursor-pointer hover:bg-red-500/5 transition-all flex items-center justify-center gap-3">
+                  <Music className="w-6 h-6 opacity-30" /><span className="font-black text-sm">{trackAudio ? t.audioSelected : t.selectFile}</span>
+                </div>
+                <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={(e) => handleFileChange(e, setTrackAudio)} />
+                <button type="submit" disabled={isUploading} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl flex items-center justify-center gap-3">
+                  {isUploading ? <Loader2 className="animate-spin" /> : t.sendMod}
+                </button>
+              </form>
+            </div>
+           </section>
         ) : null}
       </main>
 
-      {/* Music Player */}
       {nowPlaying && (
         <div className="fixed bottom-0 left-0 right-0 z-50 animate-player">
           <div className="bg-red-600 border-t-2 border-white/20 p-5 shadow-[0_-20px_60px_rgba(0,0,0,0.6)]">
             <div className="max-w-6xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
-              <div className="flex items-center gap-5 flex-1 min-w-0 w-full md:w-auto">
+              <div className="flex items-center gap-5 flex-1 min-w-0 w-full md:w-auto text-white">
                 <img src={nowPlaying.coverImage} className="w-16 h-16 rounded-2xl object-cover shadow-2xl border-2 border-white/20" alt="" />
                 <div className="truncate">
                   <div className="flex items-center gap-2">
                     <span className="bg-white/20 text-white text-[8px] px-1 rounded uppercase font-black">{t[nowPlaying.releaseType]}</span>
-                    <h4 className="font-black text-white truncate text-xl uppercase italic leading-none tracking-tighter">{nowPlaying.title}</h4>
+                    <h4 className="font-black truncate text-xl uppercase italic leading-none tracking-tighter">{nowPlaying.title}</h4>
                   </div>
                   <p className="text-red-100 text-xs font-black uppercase opacity-70 mt-2 tracking-wider">{nowPlaying.artistName}</p>
                 </div>
               </div>
               <div className="flex flex-col items-center gap-2 flex-1 w-full md:max-w-xl">
                  <div className="flex items-center gap-10">
-                    <button className="text-white opacity-40 hover:opacity-100 transition-opacity"><Music className="w-6 h-6" /></button>
                     <button onClick={togglePlay} className="bg-white text-red-600 p-5 rounded-full hover:scale-110 active:scale-95 transition-all shadow-2xl">
                       {isPlaying ? <Pause className="w-8 h-8 fill-red-600" /> : <Play className="w-8 h-8 fill-red-600 ml-1" />}
                     </button>
-                    <button className="text-white opacity-40 hover:opacity-100 transition-opacity"><Volume2 className="w-6 h-6" /></button>
                  </div>
                  <div className="w-full flex items-center gap-4 mt-3">
                     <span className="text-[10px] text-white/60 font-black font-mono">{formatTime(currentTime)}</span>
-                    <input type="range" min={0} max={duration || 100} value={currentTime} onChange={handleSeek} className="flex-1" />
+                    <input type="range" min={0} max={duration || 180} value={currentTime} onChange={handleSeek} className="flex-1" />
                     <span className="text-[10px] text-white/60 font-black font-mono">{formatTime(duration)}</span>
                  </div>
               </div>
@@ -876,12 +790,11 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Modals & Nav Footers (Standard) */}
       <footer className="md:hidden fixed bottom-0 left-0 right-0 bg-red-600 border-t-2 border-white/10 px-8 py-6 z-40 flex justify-around text-white">
-          <button onClick={() => setView('home')} className={`p-3 rounded-2xl ${view === 'home' ? 'bg-white/20' : ''}`}><Home className="w-8 h-8" /></button>
-          <button onClick={() => auth.isAuthenticated ? setView('library') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'library' ? 'bg-white/20' : ''}`}><Library className="w-8 h-8" /></button>
-          <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'upload' ? 'bg-white/20' : ''}`}><PlusCircle className="w-8 h-8" /></button>
-          <button onClick={() => setView('settings')} className={`p-3 rounded-2xl ${view === 'settings' ? 'bg-white/20' : ''}`}><Settings className="w-8 h-8" /></button>
+          <button onClick={() => setView('home')} className={`p-3 rounded-2xl ${view === 'home' ? 'bg-white/20 shadow-inner' : ''}`}><Home className="w-8 h-8" /></button>
+          <button onClick={() => auth.isAuthenticated ? setView('library') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'library' ? 'bg-white/20 shadow-inner' : ''}`}><Library className="w-8 h-8" /></button>
+          <button onClick={() => auth.isAuthenticated ? setView('upload') : setIsLoginModalOpen(true)} className={`p-3 rounded-2xl ${view === 'upload' ? 'bg-white/20 shadow-inner' : ''}`}><PlusCircle className="w-8 h-8" /></button>
+          <button onClick={() => setView('settings')} className={`p-3 rounded-2xl ${view === 'settings' ? 'bg-white/20 shadow-inner' : ''}`}><Settings className="w-8 h-8" /></button>
       </footer>
 
       {isLoginModalOpen && (
@@ -889,17 +802,15 @@ const App: React.FC = () => {
           <div className="bg-red-600 w-full max-w-lg p-12 rounded-[60px] shadow-[0_40px_120px_rgba(220,38,38,0.4)] relative border-t-[8px] border-red-400/30">
             <button onClick={() => { setIsLoginModalOpen(false); resetAuthForm(); }} className="absolute top-10 right-10 p-3 bg-white/10 hover:bg-white/20 text-white rounded-full transition-all"><X className="w-6 h-6" /></button>
             <div className="text-center mb-10 text-white">
-              <Logo className="w-24 h-24 mx-auto mb-6 drop-shadow-[0_0_40px_rgba(255,255,255,0.4)] animate-pulse" />
-              <h2 className="text-6xl font-black uppercase italic tracking-tighter leading-none">{t.theRedDoor}</h2>
+              <Logo className="w-24 h-24 mx-auto mb-6 drop-shadow-lg" />
+              <h2 className="text-4xl font-black uppercase italic tracking-tighter leading-none">{t.theRedDoor}</h2>
+              <p className="text-red-100 text-[10px] font-black uppercase mt-4 tracking-widest">{t.musiciansOnly}</p>
             </div>
             <form onSubmit={handleAuth} className="space-y-4">
               <input type="text" placeholder={t.stageName} required value={loginUsername} onChange={(e) => setLoginUsername(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none focus:border-white transition-all placeholder-white/30 uppercase italic text-xl" />
               <input type="password" placeholder={t.password} required value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none focus:border-white transition-all placeholder-white/30 uppercase italic text-xl" />
-              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.05] transition-transform mt-6">
+              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-[1.02] transition-transform mt-6">
                 {isAuthenticating ? <Loader2 className="w-8 h-8 animate-spin mx-auto" /> : (authMode === 'login' ? t.loginAction : t.registerAction)}
-              </button>
-              <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full text-white text-sm font-black uppercase italic opacity-60 hover:opacity-100 transition-opacity tracking-widest mt-4">
-                {authMode === 'login' ? t.switchToRegister : t.switchToLogin}
               </button>
             </form>
           </div>

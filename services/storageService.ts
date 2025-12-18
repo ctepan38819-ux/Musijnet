@@ -6,6 +6,7 @@ const AUTH_KEY = 'musijnet_session';
 const DB_NAME = 'musijnet_db';
 const TRACKS_STORE = 'tracks';
 const PLAYLISTS_STORE = 'playlists';
+const GLOBAL_SYNC_KEY = 'musijnet_global_sync_key';
 
 // IndexedDB Initialization
 const initDB = (): Promise<IDBDatabase> => {
@@ -181,7 +182,15 @@ export const storageService = {
     });
   },
 
-  // Cloud Sync Logic
+  // Cloud Sync Logic (Server Simulation)
+  getGlobalSyncKey: (): string | null => {
+    return localStorage.getItem(GLOBAL_SYNC_KEY);
+  },
+
+  setGlobalSyncKey: (key: string) => {
+    localStorage.setItem(GLOBAL_SYNC_KEY, key);
+  },
+
   exportCloudData: async (): Promise<string> => {
     const users = storageService.getUsers();
     const tracks = await storageService.getTracks();
@@ -194,12 +203,12 @@ export const storageService = {
       timestamp: Date.now()
     };
     
-    return btoa(JSON.stringify(data));
+    return btoa(unescape(encodeURIComponent(JSON.stringify(data))));
   },
 
   importCloudData: async (syncKey: string): Promise<boolean> => {
     try {
-      const decoded = JSON.parse(atob(syncKey)) as SyncData;
+      const decoded = JSON.parse(decodeURIComponent(escape(atob(syncKey)))) as SyncData;
       if (!decoded.users || !decoded.tracks) return false;
       
       // Save users to localStorage
@@ -208,20 +217,19 @@ export const storageService = {
       // Save tracks/playlists to IndexedDB
       const db = await initDB();
       
-      // Clear current stores first
       const clearTracks = db.transaction(TRACKS_STORE, 'readwrite').objectStore(TRACKS_STORE).clear();
       const clearPlaylists = db.transaction(PLAYLISTS_STORE, 'readwrite').objectStore(PLAYLISTS_STORE).clear();
       
       await new Promise(r => clearTracks.onsuccess = r);
       await new Promise(r => clearPlaylists.onsuccess = r);
       
-      // Batch save
       const trackTx = db.transaction(TRACKS_STORE, 'readwrite');
       decoded.tracks.forEach(t => trackTx.objectStore(TRACKS_STORE).put(t));
       
       const playlistTx = db.transaction(PLAYLISTS_STORE, 'readwrite');
       decoded.playlists.forEach(p => playlistTx.objectStore(PLAYLISTS_STORE).put(p));
       
+      storageService.setGlobalSyncKey(syncKey);
       return true;
     } catch (e) {
       console.error("Sync Error:", e);
