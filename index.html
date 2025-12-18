@@ -78,6 +78,12 @@
       to { transform: translateY(0); }
     }
     .animate-player { animation: slideUp 0.5s cubic-bezier(0.16, 1, 0.3, 1); }
+
+    @keyframes spin-slow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .animate-spin-slow { animation: spin-slow 3s linear infinite; }
   </style>
   <script type="importmap">
 {
