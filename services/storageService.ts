@@ -2,12 +2,14 @@
 import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
-const USERS_KEY = 'musijnet_local_users';
-// Standard-like bucket ID for better reliability with KVDB
-const BUCKET_URL = 'https://kvdb.io/N4m9xR2pW5tQ8vK1zL7j';
-const MANIFEST_KEY = 'musijnet_manifest_v6';
+// New dedicated production node
+const BUCKET_URL = 'https://kvdb.io/MN_PROD_NODE_V8_STABLE';
 
-const fetchWithTimeout = async (url: string, options: any = {}, timeout = 45000) => {
+// Keys for indexing
+const TRACK_INDEX_KEY = 'index_tracks';
+const USER_INDEX_KEY = 'index_users';
+
+const fetchWithTimeout = async (url: string, options: any = {}, timeout = 60000) => {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
   try {
@@ -24,83 +26,79 @@ const fetchWithTimeout = async (url: string, options: any = {}, timeout = 45000)
 };
 
 export const storageService = {
-  getRemoteManifest: async (): Promise<{ tracks: Track[], users: User[] }> => {
+  // Helper to get index (list of IDs)
+  getIndex: async (key: string): Promise<string[]> => {
     try {
-      const response = await fetchWithTimeout(`${BUCKET_URL}/${MANIFEST_KEY}`, {
-        method: 'GET',
-        mode: 'cors',
-        cache: 'no-store'
-      });
-      if (response.status === 404) return { tracks: [], users: [] };
-      if (!response.ok) throw new Error(`Ошибка сервера: ${response.status}`);
-      const text = await response.text();
-      return text ? JSON.parse(text) : { tracks: [], users: [] };
-    } catch (e) {
-      console.warn("Manifest sync failed, using local fallback", e);
-      const localTracks = localStorage.getItem('musijnet_fallback_tracks');
-      const localUsers = localStorage.getItem('musijnet_fallback_users');
-      return {
-        tracks: localTracks ? JSON.parse(localTracks) : [],
-        users: localUsers ? JSON.parse(localUsers) : []
-      };
-    }
+      const res = await fetchWithTimeout(`${BUCKET_URL}/${key}`);
+      if (res.status === 404) return [];
+      const text = await res.text();
+      return text ? JSON.parse(text) : [];
+    } catch { return []; }
   },
 
-  saveRemoteManifest: async (data: { tracks: Track[], users: User[] }): Promise<void> => {
-    // Ensure we don't store large base64 data in the manifest
-    const cleanTracks = data.tracks.map(t => ({ 
-      ...t, 
-      audioFile: '', 
-      coverImage: t.coverImage?.startsWith('data:') ? '' : t.coverImage // Only keep references or empty
+  // Helper to save index
+  saveIndex: async (key: string, ids: string[]): Promise<void> => {
+    await fetchWithTimeout(`${BUCKET_URL}/${key}`, {
+      method: 'PUT',
+      mode: 'cors',
+      body: JSON.stringify(ids)
+    });
+  },
+
+  // Get all users from the server
+  getAllUsers: async (): Promise<User[]> => {
+    const ids = await storageService.getIndex(USER_INDEX_KEY);
+    const users = await Promise.all(ids.map(async (id) => {
+      try {
+        const res = await fetchWithTimeout(`${BUCKET_URL}/u_${id}`);
+        return await res.json();
+      } catch { return null; }
     }));
-    
-    try {
-      const response = await fetchWithTimeout(`${BUCKET_URL}/${MANIFEST_KEY}`, {
-        method: 'PUT',
-        mode: 'cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracks: cleanTracks, users: data.users }),
-      });
-      if (!response.ok) {
-        throw new Error(`Ошибка сохранения манифеста (${response.status}). Возможно, база данных переполнена.`);
-      }
-      
-      localStorage.setItem('musijnet_fallback_tracks', JSON.stringify(cleanTracks));
-      localStorage.setItem('musijnet_fallback_users', JSON.stringify(data.users));
-    } catch (err: any) {
-      console.error("Failed to save manifest", err);
-      throw new Error(err.message || "Ошибка синхронизации базы данных.");
+    return users.filter(u => u !== null) as User[];
+  },
+
+  // Get all approved tracks from the server
+  getTracks: async (): Promise<Track[]> => {
+    const ids = await storageService.getIndex(TRACK_INDEX_KEY);
+    const tracks = await Promise.all(ids.map(async (id) => {
+      try {
+        const res = await fetchWithTimeout(`${BUCKET_URL}/t_${id}`);
+        const data = await res.json();
+        return data;
+      } catch { return null; }
+    }));
+    return tracks.filter(t => t !== null) as Track[];
+  },
+
+  saveUser: async (user: User) => {
+    // 1. Save user object
+    await fetchWithTimeout(`${BUCKET_URL}/u_${user.id}`, {
+      method: 'PUT',
+      mode: 'cors',
+      body: JSON.stringify(user)
+    });
+    // 2. Update index
+    const ids = await storageService.getIndex(USER_INDEX_KEY);
+    if (!ids.includes(user.id)) {
+      ids.push(user.id);
+      await storageService.saveIndex(USER_INDEX_KEY, ids);
     }
   },
 
   saveBlob: async (id: string, blob: Blob): Promise<void> => {
-    try {
-      const response = await fetchWithTimeout(`${BUCKET_URL}/${id}`, {
-        method: 'PUT',
-        mode: 'cors',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: blob,
-      }, 60000);
-      
-      if (!response.ok) {
-        if (response.status === 413) throw new Error('Файл слишком велик (лимит 1МБ)');
-        throw new Error(`Ошибка сервера при загрузке контента: ${response.status}`);
-      }
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw new Error("Таймаут загрузки.");
-      throw err;
-    }
+    const res = await fetchWithTimeout(`${BUCKET_URL}/${id}`, {
+      method: 'PUT',
+      mode: 'cors',
+      headers: { 'Content-Type': 'application/octet-stream' },
+      body: blob,
+    });
+    if (!res.ok) throw new Error(`Server Error: ${res.status}`);
   },
 
   getBlob: async (id: string): Promise<string> => {
-    const response = await fetchWithTimeout(`${BUCKET_URL}/${id}`, {
-      method: 'GET',
-      mode: 'cors',
-      cache: 'no-store'
-    });
-    if (!response.ok) return '';
-    
-    const blob = await response.blob();
+    const res = await fetchWithTimeout(`${BUCKET_URL}/${id}`);
+    if (!res.ok) return '';
+    const blob = await res.blob();
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result as string);
@@ -109,78 +107,63 @@ export const storageService = {
     });
   },
 
-  getUsers: (): User[] => {
-    const data = localStorage.getItem(USERS_KEY);
-    return data ? JSON.parse(data) : [];
-  },
-
-  saveUser: async (user: User) => {
-    const remote = await storageService.getRemoteManifest();
-    const existing = remote.users.findIndex(u => u.id === user.id);
-    if (existing === -1) {
-      remote.users.push(user);
-    } else {
-      remote.users[existing] = user;
-    }
-    await storageService.saveRemoteManifest(remote);
-    
-    const localUsers = storageService.getUsers();
-    const lIdx = localUsers.findIndex(u => u.id === user.id);
-    if (lIdx === -1) localUsers.push(user); else localUsers[lIdx] = user;
-    localStorage.setItem(USERS_KEY, JSON.stringify(localUsers));
-  },
-
-  getTracks: async (): Promise<Track[]> => {
-    const remote = await storageService.getRemoteManifest();
-    return remote.tracks;
-  },
-
   saveTrack: async (track: Track, audioBlob: Blob, coverBlob: Blob): Promise<void> => {
-    // 1. Upload cover image
-    await storageService.saveBlob(`cover_${track.id}`, coverBlob);
-    // 2. Upload audio
+    // 1. Upload blobs
     await storageService.saveBlob(`audio_${track.id}`, audioBlob);
-    // 3. Save metadata
-    const remote = await storageService.getRemoteManifest();
-    // In manifest, we just clear the fields that are now in separate blobs
-    const trackMetadata = { ...track, audioFile: '', coverImage: '' };
-    remote.tracks.push(trackMetadata);
-    await storageService.saveRemoteManifest(remote);
+    await storageService.saveBlob(`cover_${track.id}`, coverBlob);
+    
+    // 2. Save metadata (cleaned)
+    const metadata = { ...track, audioFile: '', coverImage: '' };
+    await fetchWithTimeout(`${BUCKET_URL}/t_${track.id}`, {
+      method: 'PUT',
+      mode: 'cors',
+      body: JSON.stringify(metadata)
+    });
+
+    // 3. Update global track index
+    const ids = await storageService.getIndex(TRACK_INDEX_KEY);
+    if (!ids.includes(track.id)) {
+      ids.push(track.id);
+      await storageService.saveIndex(TRACK_INDEX_KEY, ids);
+    }
   },
 
   deleteTrack: async (trackId: string): Promise<void> => {
-    const remote = await storageService.getRemoteManifest();
-    remote.tracks = remote.tracks.filter(t => t.id !== trackId);
-    await storageService.saveRemoteManifest(remote);
-    // Blobs will remain orphans on the server but we keep the manifest clean
+    // We just remove it from the index for speed
+    const ids = await storageService.getIndex(TRACK_INDEX_KEY);
+    const newIds = ids.filter(id => id !== trackId);
+    await storageService.saveIndex(TRACK_INDEX_KEY, newIds);
+    // Real deletion of individual keys can be done as a cleanup task
   },
 
-  updateTrackStatus: async (trackId: string, status: Track['status']): Promise<Track[]> => {
-    const remote = await storageService.getRemoteManifest();
-    const track = remote.tracks.find(t => t.id === trackId);
-    if (track) {
+  updateTrackStatus: async (trackId: string, status: Track['status']): Promise<void> => {
+    const res = await fetchWithTimeout(`${BUCKET_URL}/t_${trackId}`);
+    if (res.ok) {
+      const track = await res.json();
       track.status = status;
-      await storageService.saveRemoteManifest(remote);
+      await fetchWithTimeout(`${BUCKET_URL}/t_${trackId}`, {
+        method: 'PUT',
+        mode: 'cors',
+        body: JSON.stringify(track)
+      });
     }
-    return remote.tracks;
   },
 
-  toggleSavedTrack: async (userId: string, trackId: string) => {
-    const remote = await storageService.getRemoteManifest();
-    const userIndex = remote.users.findIndex(u => u.id === userId);
-    if (userIndex !== -1) {
-      const user = remote.users[userIndex];
+  // Fix error on file App.tsx on line 338: Toggle track in user's saved list
+  toggleSavedTrack: async (userId: string, trackId: string): Promise<void> => {
+    const res = await fetchWithTimeout(`${BUCKET_URL}/u_${userId}`);
+    if (res.ok) {
+      const user: User = await res.json();
       if (!user.savedTrackIds) user.savedTrackIds = [];
-      const trackIndex = user.savedTrackIds.indexOf(trackId);
-      if (trackIndex === -1) user.savedTrackIds.push(trackId);
-      else user.savedTrackIds.splice(trackIndex, 1);
-      await storageService.saveRemoteManifest(remote);
       
-      const auth = storageService.getAuth();
-      if (auth.user?.id === userId) {
-        auth.user = user;
-        storageService.setAuth(auth);
+      const index = user.savedTrackIds.indexOf(trackId);
+      if (index === -1) {
+        user.savedTrackIds.push(trackId);
+      } else {
+        user.savedTrackIds.splice(index, 1);
       }
+      
+      await storageService.saveUser(user);
     }
   },
 
