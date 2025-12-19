@@ -2,11 +2,11 @@
 import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
-// Reliable production node with versioning for clean migrations
-const BUCKET_URL = 'https://kvdb.io/MN_STABLE_V10_PROD';
+const BUCKET_URL = 'https://kvdb.io/MN_STABLE_V11_CHUNKED';
 
 const TRACK_INDEX_KEY = 'index_tracks';
 const USER_INDEX_KEY = 'index_users';
+const CHUNK_SIZE = 60 * 1024; // 60KB to stay safely under kvdb's 64KB limit
 
 const fetchWithTimeout = async (url: string, options: any = {}, timeout = 60000) => {
   const controller = new AbortController();
@@ -25,7 +25,6 @@ const fetchWithTimeout = async (url: string, options: any = {}, timeout = 60000)
 };
 
 export const storageService = {
-  // Resilient index fetching
   getIndex: async (key: string): Promise<string[]> => {
     try {
       const res = await fetchWithTimeout(`${BUCKET_URL}/${key}`, { cache: 'no-store' });
@@ -41,7 +40,7 @@ export const storageService = {
       await fetchWithTimeout(`${BUCKET_URL}/${key}`, {
         method: 'PUT',
         mode: 'cors',
-        body: JSON.stringify(Array.from(new Set(ids))) // Ensure unique IDs
+        body: JSON.stringify(Array.from(new Set(ids)))
       });
     } catch (e) { console.error("Index update failed", e); }
   },
@@ -83,39 +82,83 @@ export const storageService = {
     }
   },
 
-  saveBlob: async (id: string, blob: Blob): Promise<void> => {
-    const res = await fetchWithTimeout(`${BUCKET_URL}/${id}`, {
+  // NEW: Robust Chunked Upload
+  saveBlob: async (id: string, blob: Blob, onProgress?: (p: number) => void): Promise<void> => {
+    const buffer = await blob.arrayBuffer();
+    const totalChunks = Math.ceil(buffer.byteLength / CHUNK_SIZE);
+    
+    // 1. Save manifest
+    await fetchWithTimeout(`${BUCKET_URL}/m_${id}`, {
       method: 'PUT',
       mode: 'cors',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: blob,
+      body: JSON.stringify({ totalChunks, mimeType: blob.type, size: blob.size })
     });
-    if (!res.ok) throw new Error(`Binary Upload Failed: ${res.status}`);
+
+    // 2. Save chunks sequentially to avoid rate limiting
+    for (let i = 0; i < totalChunks; i++) {
+      const start = i * CHUNK_SIZE;
+      const end = Math.min(start + CHUNK_SIZE, buffer.byteLength);
+      const chunk = buffer.slice(start, end);
+      
+      const res = await fetchWithTimeout(`${BUCKET_URL}/c_${id}_${i}`, {
+        method: 'PUT',
+        mode: 'cors',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: chunk,
+      });
+
+      if (!res.ok) throw new Error(`Chunk ${i} upload failed: ${res.status}`);
+      if (onProgress) onProgress(Math.round(((i + 1) / totalChunks) * 100));
+    }
   },
 
+  // NEW: Robust Chunked Fetch
   getBlob: async (id: string): Promise<string> => {
     try {
-      const res = await fetchWithTimeout(`${BUCKET_URL}/${id}`);
-      if (!res.ok) return '';
-      const blob = await res.blob();
+      // 1. Get manifest
+      const mRes = await fetchWithTimeout(`${BUCKET_URL}/m_${id}`);
+      if (!mRes.ok) return '';
+      const manifest = await mRes.json();
+
+      // 2. Fetch all chunks
+      const chunks: Uint8Array[] = [];
+      for (let i = 0; i < manifest.totalChunks; i++) {
+        const cRes = await fetchWithTimeout(`${BUCKET_URL}/c_${id}_${i}`);
+        if (!cRes.ok) throw new Error(`Chunk ${i} fetch failed`);
+        const chunkBuffer = await cRes.arrayBuffer();
+        chunks.push(new Uint8Array(chunkBuffer));
+      }
+
+      // 3. Reassemble
+      const totalLength = chunks.reduce((acc, val) => acc + val.length, 0);
+      const combined = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of chunks) {
+        combined.set(chunk, offset);
+        offset += chunk.length;
+      }
+
+      const blob = new Blob([combined], { type: manifest.mimeType });
       return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onloadend = () => resolve(reader.result as string);
         reader.onerror = reject;
         reader.readAsDataURL(blob);
       });
-    } catch { return ''; }
+    } catch (e) {
+      console.error("Blob reassembly failed", e);
+      return '';
+    }
   },
 
-  saveTrack: async (track: Track, audioBlob: Blob, coverBlob: Blob): Promise<void> => {
-    // 1. Upload heavy assets first
-    await storageService.saveBlob(`audio_${track.id}`, audioBlob);
+  saveTrack: async (track: Track, audioBlob: Blob, coverBlob: Blob, onProgress?: (step: string) => void): Promise<void> => {
+    if (onProgress) onProgress("Uploading Cover...");
     await storageService.saveBlob(`cover_${track.id}`, coverBlob);
     
-    // 2. Prepare metadata (keep it small)
-    const metadata = { ...track, audioFile: '', coverImage: '' };
+    if (onProgress) onProgress("Uploading Audio Segments...");
+    await storageService.saveBlob(`audio_${track.id}`, audioBlob);
     
-    // 3. Save metadata
+    const metadata = { ...track, audioFile: '', coverImage: '' };
     const res = await fetchWithTimeout(`${BUCKET_URL}/t_${track.id}`, {
       method: 'PUT',
       mode: 'cors',
@@ -124,7 +167,6 @@ export const storageService = {
     
     if (!res.ok) throw new Error("Metadata sync failed");
 
-    // 4. Register in global index
     const ids = await storageService.getIndex(TRACK_INDEX_KEY);
     if (!ids.includes(track.id)) {
       ids.push(track.id);
@@ -136,7 +178,6 @@ export const storageService = {
     const ids = await storageService.getIndex(TRACK_INDEX_KEY);
     const newIds = ids.filter(id => id !== trackId);
     await storageService.saveIndex(TRACK_INDEX_KEY, newIds);
-    // Note: Orphans (blobs) remain on kvdb until cleanup
   },
 
   updateTrackStatus: async (trackId: string, status: Track['status']): Promise<void> => {

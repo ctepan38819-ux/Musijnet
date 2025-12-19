@@ -39,8 +39,6 @@ const formatTime = (seconds: number) => {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 };
 
-const MAX_BINARY_SIZE = 980 * 1024; 
-
 const dataURLtoBlob = (dataurl: string) => {
   const arr = dataurl.split(',');
   const mime = arr[0].match(/:(.*?);/)?.[1];
@@ -77,7 +75,6 @@ const App: React.FC = () => {
   const [isExplicit, setIsExplicit] = useState(false);
   const [trackCover, setTrackCover] = useState<string | null>(null);
   const [trackAudio, setTrackAudio] = useState<string | null>(null);
-  const [trackAudioSize, setTrackAudioSize] = useState<number>(0);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadStep, setUploadStep] = useState('');
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -89,7 +86,6 @@ const App: React.FC = () => {
 
   const t = translations[auth.language];
 
-  // Apply theme to document body
   useEffect(() => {
     document.body.classList.remove('theme-red-white');
     if (auth.theme === 'red-white') {
@@ -215,7 +211,7 @@ const App: React.FC = () => {
     
     setIsUploading(true);
     setUploadError(null);
-    setUploadStep('Подготовка пакетов...');
+    setUploadStep('Разделение данных...');
 
     const trackId = Math.random().toString(36).substr(2, 9);
     const audioBlob = dataURLtoBlob(trackAudio);
@@ -231,18 +227,17 @@ const App: React.FC = () => {
       audioFile: '',
       isExplicit: isExplicit,
       releaseType: 'single',
-      // Auto-approve for developer to see immediate results
       status: auth.user.isDeveloper ? 'approved' : 'pending',
       createdAt: Date.now()
     };
 
     try {
-      setUploadStep('Загрузка в облако...');
-      await storageService.saveTrack(newTrack, audioBlob, coverBlob);
-      setUploadStep('Финальная сверка...');
+      await storageService.saveTrack(newTrack, audioBlob, coverBlob, (step) => {
+        setUploadStep(step);
+      });
+      setUploadStep('Завершение...');
       await syncData(true); 
       setView('profile');
-      // Reset form
       setUploadTitle('');
       setTrackCover(null);
       setTrackAudio(null);
@@ -250,7 +245,8 @@ const App: React.FC = () => {
       if (trackAudioRef.current) trackAudioRef.current.value = '';
       if (trackCoverRef.current) trackCoverRef.current.value = '';
     } catch (err: any) {
-      setUploadError("Ошибка публикации. Файлы могут быть слишком велики (лимит 1МБ).");
+      setUploadError("Сбой сети. Мы разделили файл на части, но сервер отклонил сегмент. Попробуйте еще раз.");
+      console.error(err);
     } finally {
       setIsUploading(false);
       setUploadStep('');
@@ -295,7 +291,7 @@ const App: React.FC = () => {
                <h1 className="text-xl font-black uppercase italic tracking-tighter leading-none">{APP_NAME}</h1>
                <div className="flex items-center gap-1.5 mt-0.5">
                   <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-green-300 animate-pulse'}`} />
-                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'STABLE CONNECTION'}</span>
+                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'CHUNKED PROTOCOL V2'}</span>
                </div>
             </div>
           </div>
@@ -421,7 +417,6 @@ const App: React.FC = () => {
                    <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={e => {
                      const f = e.target.files?.[0];
                      if (f) { 
-                       setTrackAudioSize(f.size);
                        const r = new FileReader(); r.onloadend = () => setTrackAudio(r.result as string); r.readAsDataURL(f); 
                      }
                    }} />
