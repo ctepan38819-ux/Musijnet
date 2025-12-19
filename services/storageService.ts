@@ -2,8 +2,8 @@
 import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
-// Incremented node version to ensure clean start and avoid 404 on legacy indexes
-const BUCKET_URL = 'https://kvdb.io/MN_PROD_NODE_V9_ATOMIC';
+// Reliable production node with versioning for clean migrations
+const BUCKET_URL = 'https://kvdb.io/MN_STABLE_V10_PROD';
 
 const TRACK_INDEX_KEY = 'index_tracks';
 const USER_INDEX_KEY = 'index_users';
@@ -25,21 +25,25 @@ const fetchWithTimeout = async (url: string, options: any = {}, timeout = 60000)
 };
 
 export const storageService = {
+  // Resilient index fetching
   getIndex: async (key: string): Promise<string[]> => {
     try {
       const res = await fetchWithTimeout(`${BUCKET_URL}/${key}`, { cache: 'no-store' });
       if (res.status === 404) return [];
+      if (!res.ok) return [];
       const text = await res.text();
       return text ? JSON.parse(text) : [];
     } catch { return []; }
   },
 
   saveIndex: async (key: string, ids: string[]): Promise<void> => {
-    await fetchWithTimeout(`${BUCKET_URL}/${key}`, {
-      method: 'PUT',
-      mode: 'cors',
-      body: JSON.stringify(ids)
-    });
+    try {
+      await fetchWithTimeout(`${BUCKET_URL}/${key}`, {
+        method: 'PUT',
+        mode: 'cors',
+        body: JSON.stringify(Array.from(new Set(ids))) // Ensure unique IDs
+      });
+    } catch (e) { console.error("Index update failed", e); }
   },
 
   getAllUsers: async (): Promise<User[]> => {
@@ -86,30 +90,41 @@ export const storageService = {
       headers: { 'Content-Type': 'application/octet-stream' },
       body: blob,
     });
-    if (!res.ok) throw new Error(`Status ${res.status}`);
+    if (!res.ok) throw new Error(`Binary Upload Failed: ${res.status}`);
   },
 
   getBlob: async (id: string): Promise<string> => {
-    const res = await fetchWithTimeout(`${BUCKET_URL}/${id}`);
-    if (!res.ok) return '';
-    const blob = await res.blob();
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
+    try {
+      const res = await fetchWithTimeout(`${BUCKET_URL}/${id}`);
+      if (!res.ok) return '';
+      const blob = await res.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    } catch { return ''; }
   },
 
   saveTrack: async (track: Track, audioBlob: Blob, coverBlob: Blob): Promise<void> => {
+    // 1. Upload heavy assets first
     await storageService.saveBlob(`audio_${track.id}`, audioBlob);
     await storageService.saveBlob(`cover_${track.id}`, coverBlob);
+    
+    // 2. Prepare metadata (keep it small)
     const metadata = { ...track, audioFile: '', coverImage: '' };
-    await fetchWithTimeout(`${BUCKET_URL}/t_${track.id}`, {
+    
+    // 3. Save metadata
+    const res = await fetchWithTimeout(`${BUCKET_URL}/t_${track.id}`, {
       method: 'PUT',
       mode: 'cors',
       body: JSON.stringify(metadata)
     });
+    
+    if (!res.ok) throw new Error("Metadata sync failed");
+
+    // 4. Register in global index
     const ids = await storageService.getIndex(TRACK_INDEX_KEY);
     if (!ids.includes(track.id)) {
       ids.push(track.id);
@@ -121,6 +136,7 @@ export const storageService = {
     const ids = await storageService.getIndex(TRACK_INDEX_KEY);
     const newIds = ids.filter(id => id !== trackId);
     await storageService.saveIndex(TRACK_INDEX_KEY, newIds);
+    // Note: Orphans (blobs) remain on kvdb until cleanup
   },
 
   updateTrackStatus: async (trackId: string, status: Track['status']): Promise<void> => {

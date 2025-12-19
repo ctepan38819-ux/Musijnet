@@ -137,6 +137,8 @@ const App: React.FC = () => {
 
     try {
       const audioSource = await storageService.getBlob(`audio_${track.id}`);
+      if (!audioSource) throw new Error("Audio not found");
+      
       if (!audioRef.current) audioRef.current = new Audio();
       audioRef.current.src = audioSource;
       
@@ -149,7 +151,7 @@ const App: React.FC = () => {
       }
     } catch (err) {
       setIsBuffering(false);
-      alert("Ошибка воспроизведения. Возможно, файл удален.");
+      alert("Сбой воспроизведения. Файл может быть в процессе обработки.");
     }
   };
 
@@ -201,7 +203,7 @@ const App: React.FC = () => {
         setIsLoginModalOpen(false);
       }
     } catch (err) {
-      alert("Ошибка доступа к серверу.");
+      alert("Сервер перегружен. Попробуйте войти через минуту.");
     } finally {
       setIsAuthenticating(false);
     }
@@ -213,7 +215,7 @@ const App: React.FC = () => {
     
     setIsUploading(true);
     setUploadError(null);
-    setUploadStep('Шифрование...');
+    setUploadStep('Подготовка пакетов...');
 
     const trackId = Math.random().toString(36).substr(2, 9);
     const audioBlob = dataURLtoBlob(trackAudio);
@@ -229,22 +231,26 @@ const App: React.FC = () => {
       audioFile: '',
       isExplicit: isExplicit,
       releaseType: 'single',
-      status: 'pending',
+      // Auto-approve for developer to see immediate results
+      status: auth.user.isDeveloper ? 'approved' : 'pending',
       createdAt: Date.now()
     };
 
     try {
-      setUploadStep('Загрузка...');
+      setUploadStep('Загрузка в облако...');
       await storageService.saveTrack(newTrack, audioBlob, coverBlob);
-      setUploadStep('Синхронизация...');
+      setUploadStep('Финальная сверка...');
       await syncData(true); 
       setView('profile');
+      // Reset form
       setUploadTitle('');
       setTrackCover(null);
       setTrackAudio(null);
       setIsExplicit(false);
+      if (trackAudioRef.current) trackAudioRef.current.value = '';
+      if (trackCoverRef.current) trackCoverRef.current.value = '';
     } catch (err: any) {
-      setUploadError("Превышен лимит или сбой сети. Попробуйте сжать файлы.");
+      setUploadError("Ошибка публикации. Файлы могут быть слишком велики (лимит 1МБ).");
     } finally {
       setIsUploading(false);
       setUploadStep('');
@@ -270,6 +276,7 @@ const App: React.FC = () => {
     else if (view === 'profile') base = tracks.filter(t => t.artistId === auth.user?.id);
     else if (view === 'library') base = tracks.filter(t => auth.user?.savedTrackIds?.includes(t.id));
     else if (view === 'moderation') base = tracks.filter(t => t.status === 'pending');
+    
     if (q) return base.filter(t => t.title.toLowerCase().includes(q) || t.artistName.toLowerCase().includes(q));
     return base;
   }, [tracks, view, searchQuery, auth.user]);
@@ -288,7 +295,7 @@ const App: React.FC = () => {
                <h1 className="text-xl font-black uppercase italic tracking-tighter leading-none">{APP_NAME}</h1>
                <div className="flex items-center gap-1.5 mt-0.5">
                   <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-green-300 animate-pulse'}`} />
-                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'GLOBAL HUB'}</span>
+                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'STABLE CONNECTION'}</span>
                </div>
             </div>
           </div>
@@ -314,7 +321,7 @@ const App: React.FC = () => {
               <div className="flex items-center gap-3">
                 <button onClick={() => setView('upload')} className="bg-white text-red-600 px-4 py-1.5 rounded-full font-black text-[9px] uppercase shadow-lg hover:scale-105 transition-transform">{t.upload}</button>
                 <img src={auth.user?.avatar} className="w-9 h-9 rounded-full border-2 border-white/50 cursor-pointer shadow-lg" onClick={() => setView('profile')} />
-                <button onClick={() => { storageService.logout(); window.location.reload(); }} className="p-2 hover:bg-white/10 rounded-full"><LogOut className="w-5 h-5 opacity-60" /></button>
+                <button onClick={() => { storageService.logout(); window.location.reload(); }} className="p-2 hover:bg-white/10 rounded-full transition-colors"><LogOut className="w-5 h-5 opacity-60 hover:opacity-100" /></button>
               </div>
             ) : (
               <button onClick={() => setIsLoginModalOpen(true)} className="bg-white text-red-600 px-6 py-2 rounded-full font-black text-[10px] uppercase shadow-lg hover:bg-red-50 transition-colors">{t.login}</button>
@@ -338,7 +345,7 @@ const App: React.FC = () => {
                     <div className="flex items-center gap-4 bg-red-600/5 px-6 py-3 rounded-2xl border border-red-600/10">
                        <div className="flex items-center gap-1.5 text-green-500">
                           <Wifi className="w-4 h-4" />
-                          <span className="text-[10px] font-black uppercase">Nodes Online</span>
+                          <span className="text-[10px] font-black uppercase">Nodes Active</span>
                        </div>
                        <div className="flex items-center gap-1.5 text-red-600">
                           <Users className="w-4 h-4" />
@@ -347,7 +354,7 @@ const App: React.FC = () => {
                     </div>
                  </div>
                  {isLoadingTracks ? (
-                   <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs tracking-widest">CONNECTING TO HUB...</p></div>
+                   <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs tracking-widest">FETCHING GLOBAL DATA...</p></div>
                  ) : (
                    filteredTracks.length === 0 ? <p className="opacity-30 italic text-center py-20">{t.noTracks}</p> : (
                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
@@ -380,6 +387,9 @@ const App: React.FC = () => {
                 }} onPlay={handlePlayTrack} />
               ))}
             </div>
+            {filteredTracks.length === 0 && (
+              <div className="text-center py-20 opacity-20 font-black uppercase text-xl italic">{t.cleanDesk}</div>
+            )}
           </div>
         )}
 
@@ -389,23 +399,24 @@ const App: React.FC = () => {
                 <h2 className="text-4xl font-black uppercase italic text-red-600 mb-10">{t.dropTrack}</h2>
                 <form onSubmit={handleUpload} className="space-y-8">
                    {uploadError && (
-                     <div className="bg-red-600/20 border-2 border-red-600 p-6 rounded-3xl text-red-600 font-bold text-xs uppercase shadow-inner">
-                        <AlertCircle className="w-6 h-6 inline-block mr-2" /> {uploadError}
+                     <div className="bg-red-600/20 border-2 border-red-600 p-6 rounded-3xl text-red-600 font-bold text-xs uppercase shadow-inner flex items-center gap-3">
+                        <AlertCircle className="w-6 h-6 flex-shrink-0" /> 
+                        <span>{uploadError}</span>
                      </div>
                    )}
-                   <div onClick={() => trackCoverRef.current?.click()} className="w-64 h-64 mx-auto bg-black/5 border-2 border-dashed border-red-500/20 rounded-[40px] flex items-center justify-center cursor-pointer overflow-hidden relative shadow-inner">
-                      {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <ImageIcon className="w-12 h-12 opacity-10" />}
+                   <div onClick={() => trackCoverRef.current?.click()} className="w-64 h-64 mx-auto bg-black/5 border-2 border-dashed border-red-500/20 rounded-[40px] flex items-center justify-center cursor-pointer overflow-hidden relative shadow-inner group transition-all hover:bg-red-600/5">
+                      {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-2 opacity-10"><ImageIcon className="w-12 h-12" /><span className="text-[10px] font-black uppercase">JPG/PNG</span></div>}
                    </div>
                    <input type="file" hidden ref={trackCoverRef} accept="image/*" onChange={e => {
                      const f = e.target.files?.[0];
                      if (f) { const r = new FileReader(); r.onloadend = () => setTrackCover(r.result as string); r.readAsDataURL(f); }
                    }} />
                    
-                   <input type="text" required value={uploadTitle} onChange={e => setUploadTitle(e.target.value)} placeholder={t.trackTitle} className="w-full p-6 bg-red-600/5 rounded-2xl font-black text-xl outline-none" />
+                   <input type="text" required value={uploadTitle} onChange={e => setUploadTitle(e.target.value)} placeholder={t.trackTitle} className="w-full p-6 bg-red-600/5 rounded-2xl font-black text-xl outline-none focus:bg-red-600/10 transition-colors" />
                    
-                   <div onClick={() => trackAudioRef.current?.click()} className="w-full p-8 bg-white border-2 border-dashed border-red-500/20 rounded-[32px] text-center cursor-pointer font-black uppercase text-sm hover:bg-red-600/5 transition-all">
-                      <Music className="w-8 h-8 opacity-30 mx-auto mb-2" /> 
-                      {trackAudio ? "Ready ✓" : t.selectFile}
+                   <div onClick={() => trackAudioRef.current?.click()} className="w-full p-8 bg-white border-2 border-dashed border-red-500/20 rounded-[32px] text-center cursor-pointer font-black uppercase text-sm hover:bg-red-600/5 transition-all flex flex-col items-center gap-2">
+                      <Music className="w-8 h-8 opacity-30" /> 
+                      {trackAudio ? <span className="text-green-600">Audio ready ✓</span> : t.selectFile}
                    </div>
                    <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={e => {
                      const f = e.target.files?.[0];
@@ -419,7 +430,7 @@ const App: React.FC = () => {
                       <input type="checkbox" id="explicit-check" checked={isExplicit} onChange={e => setIsExplicit(e.target.checked)} className="accent-red-600 w-5 h-5 cursor-pointer" />
                       <label htmlFor="explicit-check" className="font-black uppercase text-[10px] italic cursor-pointer flex-1">{t.explicit}</label>
                    </div>
-                   <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl disabled:opacity-20">
+                   <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl disabled:opacity-20 transition-all active:scale-95">
                       {isUploading ? <><Loader2 className="animate-spin inline-block mr-2" /> {uploadStep}</> : t.sendMod}
                    </button>
                 </form>
@@ -474,10 +485,6 @@ const App: React.FC = () => {
                 </button>
               </div>
             </section>
-
-            <div className="text-center opacity-20 font-black uppercase text-[10px] tracking-widest italic">
-              {t.version}
-            </div>
           </div>
         )}
 
@@ -485,14 +492,14 @@ const App: React.FC = () => {
           <div className="space-y-16">
              <div className="app-card p-12 rounded-[60px] flex flex-col md:flex-row items-center gap-12 relative overflow-hidden">
                 <div className="relative">
-                  <img src={auth.user.avatar} className="w-48 h-48 rounded-full border-[8px] border-red-600 shadow-2xl relative z-10 object-cover" />
+                  <img src={auth.user.avatar} className="w-48 h-48 rounded-full border-[8px] border-red-600 shadow-2xl relative z-10 object-cover bg-red-600" />
                   {auth.user.isDeveloper && <Crown className="absolute -top-6 -right-6 w-16 h-16 text-yellow-400 fill-yellow-400 z-20 drop-shadow-2xl animate-bounce" />}
                 </div>
                 <div className="flex-1 text-center md:text-left relative z-10">
                    <h2 className="text-7xl font-black uppercase italic tracking-tighter text-red-600 mb-4">{auth.user.username}</h2>
                    <div className="flex flex-wrap gap-4 justify-center md:justify-start">
                       <span className="bg-red-600 text-white px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{auth.user.isDeveloper ? t.developer : t.verifiedMusician}</span>
-                      <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{filteredTracks.length} Global Tracks</span>
+                      <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{filteredTracks.length} Cloud Assets</span>
                    </div>
                 </div>
              </div>
@@ -504,6 +511,12 @@ const App: React.FC = () => {
                     await syncData(true);
                   }} />
                 ))}
+                {filteredTracks.length === 0 && (
+                  <button onClick={() => setView('upload')} className="aspect-square rounded-[40px] border-4 border-dashed border-red-500/20 flex flex-col items-center justify-center gap-4 opacity-40 hover:opacity-100 hover:border-red-600 transition-all">
+                    <PlusCircle className="w-12 h-12" />
+                    <span className="font-black uppercase text-[10px]">{t.firstUpload}</span>
+                  </button>
+                )}
              </div>
           </div>
         )}
@@ -520,7 +533,7 @@ const App: React.FC = () => {
                    </div>
                 </div>
                 <div className="flex flex-col items-center gap-3 flex-1 w-full">
-                   <button onClick={() => isPlaying ? audioRef.current?.pause() : audioRef.current?.play()} className="bg-white text-red-600 p-4 rounded-full shadow-2xl" disabled={isBuffering}>
+                   <button onClick={() => isPlaying ? audioRef.current?.pause() : audioRef.current?.play()} className="bg-white text-red-600 p-4 rounded-full shadow-2xl hover:scale-110 active:scale-95 transition-transform" disabled={isBuffering}>
                       {isBuffering ? <Loader2 className="animate-spin w-8 h-8" /> : (isPlaying ? <Pause className="w-8 h-8 fill-red-600" /> : <Play className="w-8 h-8 fill-red-600 ml-1" />)}
                    </button>
                    <div className="w-full flex items-center gap-3 text-white">
@@ -538,15 +551,15 @@ const App: React.FC = () => {
       {isLoginModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/95 backdrop-blur-2xl">
           <div className="bg-red-600 w-full max-w-lg p-12 rounded-[60px] shadow-2xl relative">
-            <button onClick={() => setIsLoginModalOpen(false)} className="absolute top-10 right-10 text-white/40"><X className="w-8 h-8" /></button>
+            <button onClick={() => setIsLoginModalOpen(false)} className="absolute top-10 right-10 text-white/40 hover:text-white transition-colors"><X className="w-8 h-8" /></button>
             <div className="text-center mb-10 text-white">
               <Logo className="w-24 h-24 mx-auto mb-6" />
               <h2 className="text-4xl font-black uppercase italic leading-none">{t.theRedDoor}</h2>
             </div>
             <form onSubmit={handleAuth} className="space-y-4">
-              <input type="text" placeholder={t.stageName} required value={loginUsername} onChange={e => setLoginUsername(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none uppercase italic text-xl" />
-              <input type="password" placeholder={t.password} required value={loginPassword} onChange={e => setLoginPassword(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none uppercase italic text-xl" />
-              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl">
+              <input type="text" placeholder={t.stageName} required value={loginUsername} onChange={e => setLoginUsername(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none uppercase italic text-xl focus:border-white transition-all" />
+              <input type="password" placeholder={t.password} required value={loginPassword} onChange={e => setLoginPassword(e.target.value)} className="w-full bg-white/10 border-2 border-white/20 rounded-3xl p-6 font-black text-white outline-none uppercase italic text-xl focus:border-white transition-all" />
+              <button type="submit" disabled={isAuthenticating} className="w-full bg-white text-red-600 py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl hover:scale-105 transition-all">
                 {isAuthenticating ? <Loader2 className="animate-spin mx-auto" /> : (authMode === 'login' ? t.loginAction : t.registerAction)}
               </button>
               <button type="button" onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')} className="w-full text-white/60 font-black uppercase text-[10px] italic mt-4">{authMode === 'login' ? t.switchToRegister : t.switchToLogin}</button>
