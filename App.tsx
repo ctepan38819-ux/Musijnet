@@ -28,7 +28,8 @@ import {
   Users,
   Moon,
   Sun,
-  Globe
+  Globe,
+  Zap
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
@@ -113,7 +114,7 @@ const App: React.FC = () => {
         }
       }
     } catch (e) {
-      console.error("Cloud Sync Failed", e);
+      console.error("Relay Node Unavailable", e);
     } finally {
       setIsLoadingTracks(false);
       setIsSyncing(false);
@@ -133,7 +134,7 @@ const App: React.FC = () => {
 
     try {
       const audioSource = await storageService.getBlob(`audio_${track.id}`);
-      if (!audioSource) throw new Error("Audio not found");
+      if (!audioSource) throw new Error("Audio buffer empty");
       
       if (!audioRef.current) audioRef.current = new Audio();
       audioRef.current.src = audioSource;
@@ -147,7 +148,7 @@ const App: React.FC = () => {
       }
     } catch (err) {
       setIsBuffering(false);
-      alert("Сбой воспроизведения. Файл может быть в процессе обработки.");
+      alert("Relay Node: Не удалось извлечь аудио-пакет.");
     }
   };
 
@@ -199,7 +200,7 @@ const App: React.FC = () => {
         setIsLoginModalOpen(false);
       }
     } catch (err) {
-      alert("Сервер перегружен. Попробуйте войти через минуту.");
+      alert("Relay Node Authentication Error.");
     } finally {
       setIsAuthenticating(false);
     }
@@ -211,7 +212,7 @@ const App: React.FC = () => {
     
     setIsUploading(true);
     setUploadError(null);
-    setUploadStep('Разделение данных...');
+    setUploadStep('Relay: Segmenting...');
 
     const trackId = Math.random().toString(36).substr(2, 9);
     const audioBlob = dataURLtoBlob(trackAudio);
@@ -235,18 +236,15 @@ const App: React.FC = () => {
       await storageService.saveTrack(newTrack, audioBlob, coverBlob, (step) => {
         setUploadStep(step);
       });
-      setUploadStep('Завершение...');
+      setUploadStep('Relay: Finalizing...');
       await syncData(true); 
       setView('profile');
       setUploadTitle('');
       setTrackCover(null);
       setTrackAudio(null);
       setIsExplicit(false);
-      if (trackAudioRef.current) trackAudioRef.current.value = '';
-      if (trackCoverRef.current) trackCoverRef.current.value = '';
     } catch (err: any) {
-      setUploadError("Сбой сети. Мы разделили файл на части, но сервер отклонил сегмент. Попробуйте еще раз.");
-      console.error(err);
+      setUploadError("Relay Node Error: Сеть нестабильна. Попробуйте еще раз.");
     } finally {
       setIsUploading(false);
       setUploadStep('');
@@ -290,8 +288,8 @@ const App: React.FC = () => {
             <div className="flex flex-col">
                <h1 className="text-xl font-black uppercase italic tracking-tighter leading-none">{APP_NAME}</h1>
                <div className="flex items-center gap-1.5 mt-0.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-green-300 animate-pulse'}`} />
-                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'CHUNKED PROTOCOL V2'}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-green-400 animate-pulse'}`} />
+                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'RELAY NODE V12 ACTIVE'}</span>
                </div>
             </div>
           </div>
@@ -340,19 +338,24 @@ const App: React.FC = () => {
                     <h3 className="text-4xl font-black uppercase italic flex items-center gap-4 text-red-600"><Database className="w-10 h-10" /> {t.topCharts}</h3>
                     <div className="flex items-center gap-4 bg-red-600/5 px-6 py-3 rounded-2xl border border-red-600/10">
                        <div className="flex items-center gap-1.5 text-green-500">
-                          <Wifi className="w-4 h-4" />
-                          <span className="text-[10px] font-black uppercase">Nodes Active</span>
+                          <Zap className="w-4 h-4 animate-pulse" />
+                          <span className="text-[10px] font-black uppercase">Relay Stable</span>
                        </div>
                        <div className="flex items-center gap-1.5 text-red-600">
                           <Users className="w-4 h-4" />
-                          <span className="text-[10px] font-black uppercase">{allUsers.length} Artists</span>
+                          <span className="text-[10px] font-black uppercase">{allUsers.length} Nodes</span>
                        </div>
                     </div>
                  </div>
                  {isLoadingTracks ? (
-                   <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs tracking-widest">FETCHING GLOBAL DATA...</p></div>
+                   <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs tracking-widest">INITIALIZING NEW RELAY V12...</p></div>
                  ) : (
-                   filteredTracks.length === 0 ? <p className="opacity-30 italic text-center py-20">{t.noTracks}</p> : (
+                   filteredTracks.length === 0 ? (
+                     <div className="flex flex-col items-center gap-6 py-20">
+                        <p className="opacity-30 italic text-center">{t.noTracks}</p>
+                        <button onClick={() => setView('upload')} className="bg-red-600 text-white px-8 py-3 rounded-2xl font-black uppercase italic text-xs shadow-2xl hover:scale-105 transition-transform">First Deployment</button>
+                     </div>
+                   ) : (
                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
                         {filteredTracks.map(track => (
                           <TrackCard key={track.id} track={track} onPlay={handlePlayTrack} onDelete={async (id) => {
@@ -383,9 +386,6 @@ const App: React.FC = () => {
                 }} onPlay={handlePlayTrack} />
               ))}
             </div>
-            {filteredTracks.length === 0 && (
-              <div className="text-center py-20 opacity-20 font-black uppercase text-xl italic">{t.cleanDesk}</div>
-            )}
           </div>
         )}
 
@@ -401,7 +401,7 @@ const App: React.FC = () => {
                      </div>
                    )}
                    <div onClick={() => trackCoverRef.current?.click()} className="w-64 h-64 mx-auto bg-black/5 border-2 border-dashed border-red-500/20 rounded-[40px] flex items-center justify-center cursor-pointer overflow-hidden relative shadow-inner group transition-all hover:bg-red-600/5">
-                      {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-2 opacity-10"><ImageIcon className="w-12 h-12" /><span className="text-[10px] font-black uppercase">JPG/PNG</span></div>}
+                      {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-2 opacity-10"><ImageIcon className="w-12 h-12" /><span className="text-[10px] font-black uppercase">IMAGE BUFFER</span></div>}
                    </div>
                    <input type="file" hidden ref={trackCoverRef} accept="image/*" onChange={e => {
                      const f = e.target.files?.[0];
@@ -412,7 +412,7 @@ const App: React.FC = () => {
                    
                    <div onClick={() => trackAudioRef.current?.click()} className="w-full p-8 bg-white border-2 border-dashed border-red-500/20 rounded-[32px] text-center cursor-pointer font-black uppercase text-sm hover:bg-red-600/5 transition-all flex flex-col items-center gap-2">
                       <Music className="w-8 h-8 opacity-30" /> 
-                      {trackAudio ? <span className="text-green-600">Audio ready ✓</span> : t.selectFile}
+                      {trackAudio ? <span className="text-green-600">Buffer Locked ✓</span> : t.selectFile}
                    </div>
                    <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={e => {
                      const f = e.target.files?.[0];
@@ -421,10 +421,6 @@ const App: React.FC = () => {
                      }
                    }} />
 
-                   <div className="flex items-center gap-3 bg-red-600/5 p-4 rounded-xl">
-                      <input type="checkbox" id="explicit-check" checked={isExplicit} onChange={e => setIsExplicit(e.target.checked)} className="accent-red-600 w-5 h-5 cursor-pointer" />
-                      <label htmlFor="explicit-check" className="font-black uppercase text-[10px] italic cursor-pointer flex-1">{t.explicit}</label>
-                   </div>
                    <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl disabled:opacity-20 transition-all active:scale-95">
                       {isUploading ? <><Loader2 className="animate-spin inline-block mr-2" /> {uploadStep}</> : t.sendMod}
                    </button>
@@ -443,20 +439,8 @@ const App: React.FC = () => {
                 <h3 className="text-2xl font-black uppercase italic">{t.interfaceTheme}</h3>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <button 
-                  onClick={() => handleUpdateTheme('red-black')}
-                  className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.theme === 'red-black' ? 'bg-red-600 text-white border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}
-                >
-                  <Moon className="w-6 h-6 mx-auto mb-2" />
-                  Red & Black
-                </button>
-                <button 
-                  onClick={() => handleUpdateTheme('red-white')}
-                  className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.theme === 'red-white' ? 'bg-white text-red-600 border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}
-                >
-                  <Sun className="w-6 h-6 mx-auto mb-2" />
-                  Red & White
-                </button>
+                <button onClick={() => handleUpdateTheme('red-black')} className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.theme === 'red-black' ? 'bg-red-600 text-white border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}>Red & Black</button>
+                <button onClick={() => handleUpdateTheme('red-white')} className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.theme === 'red-white' ? 'bg-white text-red-600 border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}>Red & White</button>
               </div>
             </section>
 
@@ -466,18 +450,8 @@ const App: React.FC = () => {
                 <h3 className="text-2xl font-black uppercase italic">{t.language}</h3>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <button 
-                  onClick={() => handleUpdateLanguage('en')}
-                  className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.language === 'en' ? 'bg-red-600 text-white border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}
-                >
-                  English
-                </button>
-                <button 
-                  onClick={() => handleUpdateLanguage('ru')}
-                  className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.language === 'ru' ? 'bg-red-600 text-white border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}
-                >
-                  Русский
-                </button>
+                <button onClick={() => handleUpdateLanguage('en')} className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.language === 'en' ? 'bg-red-600 text-white border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}>English</button>
+                <button onClick={() => handleUpdateLanguage('ru')} className={`p-6 rounded-2xl border-4 font-black uppercase italic text-sm transition-all ${auth.language === 'ru' ? 'bg-red-600 text-white border-red-400' : 'bg-black/20 text-red-600/60 border-transparent hover:bg-red-600/10'}`}>Русский</button>
               </div>
             </section>
           </div>
@@ -494,7 +468,7 @@ const App: React.FC = () => {
                    <h2 className="text-7xl font-black uppercase italic tracking-tighter text-red-600 mb-4">{auth.user.username}</h2>
                    <div className="flex flex-wrap gap-4 justify-center md:justify-start">
                       <span className="bg-red-600 text-white px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{auth.user.isDeveloper ? t.developer : t.verifiedMusician}</span>
-                      <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{filteredTracks.length} Cloud Assets</span>
+                      <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">RELAY V12 NODE</span>
                    </div>
                 </div>
              </div>
@@ -506,12 +480,6 @@ const App: React.FC = () => {
                     await syncData(true);
                   }} />
                 ))}
-                {filteredTracks.length === 0 && (
-                  <button onClick={() => setView('upload')} className="aspect-square rounded-[40px] border-4 border-dashed border-red-500/20 flex flex-col items-center justify-center gap-4 opacity-40 hover:opacity-100 hover:border-red-600 transition-all">
-                    <PlusCircle className="w-12 h-12" />
-                    <span className="font-black uppercase text-[10px]">{t.firstUpload}</span>
-                  </button>
-                )}
              </div>
           </div>
         )}
