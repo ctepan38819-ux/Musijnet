@@ -2,51 +2,57 @@
 import { User, Track, AuthState } from '../types';
 
 const AUTH_KEY = 'musijnet_session';
-// New isolated relay node to fix "Unexpected Error" and network failures
-const BUCKET_URL = 'https://kvdb.io/MUSIJNET_V12_RELAY';
+// V13 ULTRA: Fresh node with enhanced stability protocol
+const BUCKET_URL = 'https://kvdb.io/MUSIJNET_V13_ULTRA';
 
 const TRACK_INDEX_KEY = 'index_tracks';
 const USER_INDEX_KEY = 'index_users';
-const CHUNK_SIZE = 60 * 1024; // 60KB chunks
+const CHUNK_SIZE = 48 * 1024; // Smaller 48KB chunks for extreme stability
+const THROTTLE_MS = 250; // Pause between chunks to prevent 429 errors
 
-const fetchWithTimeout = async (url: string, options: any = {}, timeout = 90000) => {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
-  
-  // Retry logic for unstable connections
-  const maxRetries = 3;
+const fetchWithRetry = async (url: string, options: any = {}, timeout = 60000) => {
+  const maxRetries = 5;
   let lastError: any;
 
   for (let i = 0; i < maxRetries; i++) {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    
     try {
       const response = await fetch(url, {
         ...options,
         signal: controller.signal
       });
       
-      if (response.status === 429) { // Rate limit
-        await new Promise(r => setTimeout(r, 1000 * (i + 1)));
+      clearTimeout(id);
+
+      if (response.status === 429) {
+        // Wait longer on rate limits
+        await new Promise(r => setTimeout(r, 2000 * (i + 1)));
         continue;
       }
       
-      clearTimeout(id);
+      if (!response.ok && response.status !== 404) {
+        throw new Error(`Server status ${response.status}`);
+      }
+      
       return response;
     } catch (e) {
+      clearTimeout(id);
       lastError = e;
-      if (i < maxRetries - 1) await new Promise(r => setTimeout(r, 500));
+      // Exponential backoff
+      await new Promise(r => setTimeout(r, 1000 * (i + 1)));
     }
   }
   
-  clearTimeout(id);
-  throw lastError || new Error("Network Relay Failure");
+  throw lastError || new Error("Connection Timeout after 5 retries");
 };
 
 export const storageService = {
   getIndex: async (key: string): Promise<string[]> => {
     try {
-      const res = await fetchWithTimeout(`${BUCKET_URL}/${key}`, { cache: 'no-store' });
+      const res = await fetchWithRetry(`${BUCKET_URL}/${key}`, { cache: 'no-store' });
       if (res.status === 404) return [];
-      if (!res.ok) return [];
       const text = await res.text();
       return text ? JSON.parse(text) : [];
     } catch { return []; }
@@ -54,19 +60,19 @@ export const storageService = {
 
   saveIndex: async (key: string, ids: string[]): Promise<void> => {
     try {
-      await fetchWithTimeout(`${BUCKET_URL}/${key}`, {
+      await fetchWithRetry(`${BUCKET_URL}/${key}`, {
         method: 'PUT',
         mode: 'cors',
         body: JSON.stringify(Array.from(new Set(ids)))
       });
-    } catch (e) { console.error("Index sync failed", e); }
+    } catch (e) { console.error("Index sync failure", e); }
   },
 
   getAllUsers: async (): Promise<User[]> => {
     const ids = await storageService.getIndex(USER_INDEX_KEY);
     const users = await Promise.all(ids.map(async (id) => {
       try {
-        const res = await fetchWithTimeout(`${BUCKET_URL}/u_${id}`, { cache: 'no-store' });
+        const res = await fetchWithRetry(`${BUCKET_URL}/u_${id}`, { cache: 'no-store' });
         if (!res.ok) return null;
         return await res.json();
       } catch { return null; }
@@ -78,7 +84,7 @@ export const storageService = {
     const ids = await storageService.getIndex(TRACK_INDEX_KEY);
     const tracks = await Promise.all(ids.map(async (id) => {
       try {
-        const res = await fetchWithTimeout(`${BUCKET_URL}/t_${id}`, { cache: 'no-store' });
+        const res = await fetchWithRetry(`${BUCKET_URL}/t_${id}`, { cache: 'no-store' });
         if (!res.ok) return null;
         return await res.json();
       } catch { return null; }
@@ -87,7 +93,7 @@ export const storageService = {
   },
 
   saveUser: async (user: User) => {
-    await fetchWithTimeout(`${BUCKET_URL}/u_${user.id}`, {
+    await fetchWithRetry(`${BUCKET_URL}/u_${user.id}`, {
       method: 'PUT',
       mode: 'cors',
       body: JSON.stringify(user)
@@ -99,11 +105,12 @@ export const storageService = {
     }
   },
 
-  saveBlob: async (id: string, blob: Blob, onProgress?: (p: number) => void): Promise<void> => {
+  saveBlob: async (id: string, blob: Blob, onProgress?: (p: string) => void): Promise<void> => {
     const buffer = await blob.arrayBuffer();
     const totalChunks = Math.ceil(buffer.byteLength / CHUNK_SIZE);
     
-    await fetchWithTimeout(`${BUCKET_URL}/m_${id}`, {
+    // Save Manifest
+    await fetchWithRetry(`${BUCKET_URL}/m_${id}`, {
       method: 'PUT',
       mode: 'cors',
       body: JSON.stringify({ totalChunks, mimeType: blob.type, size: blob.size })
@@ -114,28 +121,34 @@ export const storageService = {
       const end = Math.min(start + CHUNK_SIZE, buffer.byteLength);
       const chunk = buffer.slice(start, end);
       
-      const res = await fetchWithTimeout(`${BUCKET_URL}/c_${id}_${i}`, {
+      if (onProgress) onProgress(`SNC: ${i + 1}/${totalChunks}`);
+
+      await fetchWithRetry(`${BUCKET_URL}/c_${id}_${i}`, {
         method: 'PUT',
         mode: 'cors',
         headers: { 'Content-Type': 'application/octet-stream' },
         body: chunk,
       });
 
-      if (!res.ok) throw new Error(`Segment ${i} rejected by relay`);
-      if (onProgress) onProgress(Math.round(((i + 1) / totalChunks) * 100));
+      // Verification Step: ensure chunk exists
+      const verify = await fetchWithRetry(`${BUCKET_URL}/c_${id}_${i}`, { method: 'HEAD' });
+      if (!verify.ok) throw new Error(`Verification failed for segment ${i}`);
+
+      // Respect the throttle to avoid 429
+      await new Promise(r => setTimeout(r, THROTTLE_MS));
     }
   },
 
   getBlob: async (id: string): Promise<string> => {
     try {
-      const mRes = await fetchWithTimeout(`${BUCKET_URL}/m_${id}`);
+      const mRes = await fetchWithRetry(`${BUCKET_URL}/m_${id}`);
       if (!mRes.ok) return '';
       const manifest = await mRes.json();
 
       const chunks: Uint8Array[] = [];
       for (let i = 0; i < manifest.totalChunks; i++) {
-        const cRes = await fetchWithTimeout(`${BUCKET_URL}/c_${id}_${i}`);
-        if (!cRes.ok) throw new Error(`Segment ${i} missing`);
+        const cRes = await fetchWithRetry(`${BUCKET_URL}/c_${id}_${i}`);
+        if (!cRes.ok) throw new Error(`Segment ${i} missing from buffer`);
         const chunkBuffer = await cRes.arrayBuffer();
         chunks.push(new Uint8Array(chunkBuffer));
       }
@@ -156,27 +169,28 @@ export const storageService = {
         reader.readAsDataURL(blob);
       });
     } catch (e) {
-      console.error("Relay fetch failed", e);
+      console.error("Relay reconstruction failure", e);
       return '';
     }
   },
 
   saveTrack: async (track: Track, audioBlob: Blob, coverBlob: Blob, onProgress?: (step: string) => void): Promise<void> => {
-    if (onProgress) onProgress("Syncing Artwork...");
-    await storageService.saveBlob(`cover_${track.id}`, coverBlob);
-    
-    if (onProgress) onProgress("Syncing Audio Packets...");
-    await storageService.saveBlob(`audio_${track.id}`, audioBlob);
-    
-    const metadata = { ...track, audioFile: '', coverImage: '' };
-    const res = await fetchWithTimeout(`${BUCKET_URL}/t_${track.id}`, {
+    if (onProgress) onProgress("Syncing Meta...");
+    // 1. Save Meta first to reserve space
+    await fetchWithRetry(`${BUCKET_URL}/t_${track.id}`, {
       method: 'PUT',
       mode: 'cors',
-      body: JSON.stringify(metadata)
+      body: JSON.stringify({ ...track, audioFile: '', coverImage: '', status: 'pending' })
     });
-    
-    if (!res.ok) throw new Error("Central Relay Meta Error");
 
+    // 2. Heavy Lifting
+    if (onProgress) onProgress("Artwork...");
+    await storageService.saveBlob(`cover_${track.id}`, coverBlob);
+    
+    if (onProgress) onProgress("Audio Streams...");
+    await storageService.saveBlob(`audio_${track.id}`, audioBlob, onProgress);
+    
+    // 3. Register in Index
     const ids = await storageService.getIndex(TRACK_INDEX_KEY);
     if (!ids.includes(track.id)) {
       ids.push(track.id);
@@ -191,11 +205,11 @@ export const storageService = {
   },
 
   updateTrackStatus: async (trackId: string, status: Track['status']): Promise<void> => {
-    const res = await fetchWithTimeout(`${BUCKET_URL}/t_${trackId}`);
+    const res = await fetchWithRetry(`${BUCKET_URL}/t_${trackId}`);
     if (res.ok) {
       const track = await res.json();
       track.status = status;
-      await fetchWithTimeout(`${BUCKET_URL}/t_${trackId}`, {
+      await fetchWithRetry(`${BUCKET_URL}/t_${trackId}`, {
         method: 'PUT',
         mode: 'cors',
         body: JSON.stringify(track)
@@ -204,7 +218,7 @@ export const storageService = {
   },
 
   toggleSavedTrack: async (userId: string, trackId: string): Promise<void> => {
-    const res = await fetchWithTimeout(`${BUCKET_URL}/u_${userId}`);
+    const res = await fetchWithRetry(`${BUCKET_URL}/u_${userId}`);
     if (res.ok) {
       const user: User = await res.json();
       if (!user.savedTrackIds) user.savedTrackIds = [];

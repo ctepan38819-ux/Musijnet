@@ -29,7 +29,8 @@ import {
   Moon,
   Sun,
   Globe,
-  Zap
+  Zap,
+  Activity
 } from 'lucide-react';
 import TrackCard from './components/TrackCard';
 import SecretGame from './components/SecretGame';
@@ -114,7 +115,7 @@ const App: React.FC = () => {
         }
       }
     } catch (e) {
-      console.error("Relay Node Unavailable", e);
+      console.error("V13 ULTRA: Sync Delay", e);
     } finally {
       setIsLoadingTracks(false);
       setIsSyncing(false);
@@ -134,7 +135,7 @@ const App: React.FC = () => {
 
     try {
       const audioSource = await storageService.getBlob(`audio_${track.id}`);
-      if (!audioSource) throw new Error("Audio buffer empty");
+      if (!audioSource) throw new Error("Audio buffer failure");
       
       if (!audioRef.current) audioRef.current = new Audio();
       audioRef.current.src = audioSource;
@@ -148,7 +149,7 @@ const App: React.FC = () => {
       }
     } catch (err) {
       setIsBuffering(false);
-      alert("Relay Node: Не удалось извлечь аудио-пакет.");
+      alert("V13 Node: Ошибка буферизации сегмента. Попробуйте еще раз.");
     }
   };
 
@@ -200,7 +201,7 @@ const App: React.FC = () => {
         setIsLoginModalOpen(false);
       }
     } catch (err) {
-      alert("Relay Node Authentication Error.");
+      alert("V13 Node Auth Failure.");
     } finally {
       setIsAuthenticating(false);
     }
@@ -212,7 +213,7 @@ const App: React.FC = () => {
     
     setIsUploading(true);
     setUploadError(null);
-    setUploadStep('Relay: Segmenting...');
+    setUploadStep('Protocol Initializing...');
 
     const trackId = Math.random().toString(36).substr(2, 9);
     const audioBlob = dataURLtoBlob(trackAudio);
@@ -236,15 +237,14 @@ const App: React.FC = () => {
       await storageService.saveTrack(newTrack, audioBlob, coverBlob, (step) => {
         setUploadStep(step);
       });
-      setUploadStep('Relay: Finalizing...');
+      setUploadStep('Committing Index...');
       await syncData(true); 
       setView('profile');
       setUploadTitle('');
       setTrackCover(null);
       setTrackAudio(null);
-      setIsExplicit(false);
     } catch (err: any) {
-      setUploadError("Relay Node Error: Сеть нестабильна. Попробуйте еще раз.");
+      setUploadError("V13 Ultra Failure: Сеть слишком нестабильна для подтвержденной передачи. Попробуйте сменить сеть.");
     } finally {
       setIsUploading(false);
       setUploadStep('');
@@ -288,8 +288,8 @@ const App: React.FC = () => {
             <div className="flex flex-col">
                <h1 className="text-xl font-black uppercase italic tracking-tighter leading-none">{APP_NAME}</h1>
                <div className="flex items-center gap-1.5 mt-0.5">
-                  <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-green-400 animate-pulse'}`} />
-                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'RELAY NODE V12 ACTIVE'}</span>
+                  <div className={`w-1.5 h-1.5 rounded-full ${isSyncing ? 'bg-yellow-300 animate-ping' : 'bg-blue-400 animate-pulse'}`} />
+                  <span className="text-[7px] font-black uppercase opacity-60 tracking-widest">{isSyncing ? 'Linking...' : 'ULTRA STABLE V13 NODE'}</span>
                </div>
             </div>
           </div>
@@ -307,7 +307,6 @@ const App: React.FC = () => {
                 )}
               </>
             )}
-            <button onClick={() => setView('settings')} className={`text-[10px] font-black uppercase italic ${view === 'settings' ? 'opacity-100 underline underline-offset-4' : 'opacity-60 hover:opacity-100'}`}>{t.settings}</button>
           </nav>
 
           <div className="flex items-center gap-4">
@@ -335,25 +334,25 @@ const App: React.FC = () => {
             <div className="space-y-16">
               <div>
                  <div className="flex items-center justify-between mb-8">
-                    <h3 className="text-4xl font-black uppercase italic flex items-center gap-4 text-red-600"><Database className="w-10 h-10" /> {t.topCharts}</h3>
+                    <h3 className="text-4xl font-black uppercase italic flex items-center gap-4 text-red-600"><Activity className="w-10 h-10 animate-pulse" /> {t.topCharts}</h3>
                     <div className="flex items-center gap-4 bg-red-600/5 px-6 py-3 rounded-2xl border border-red-600/10">
-                       <div className="flex items-center gap-1.5 text-green-500">
-                          <Zap className="w-4 h-4 animate-pulse" />
-                          <span className="text-[10px] font-black uppercase">Relay Stable</span>
+                       <div className="flex items-center gap-1.5 text-blue-500">
+                          <Zap className="w-4 h-4 animate-bounce" />
+                          <span className="text-[10px] font-black uppercase">V13 PROTECTED</span>
                        </div>
                        <div className="flex items-center gap-1.5 text-red-600">
                           <Users className="w-4 h-4" />
-                          <span className="text-[10px] font-black uppercase">{allUsers.length} Nodes</span>
+                          <span className="text-[10px] font-black uppercase">{allUsers.length} Artists</span>
                        </div>
                     </div>
                  </div>
                  {isLoadingTracks ? (
-                   <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs tracking-widest">INITIALIZING NEW RELAY V12...</p></div>
+                   <div className="flex flex-col items-center py-20 opacity-20"><Loader2 className="animate-spin w-12 h-12 mb-4" /><p className="font-black uppercase text-xs tracking-widest">CONNECTING TO ULTRA-STABLE RELAY...</p></div>
                  ) : (
                    filteredTracks.length === 0 ? (
                      <div className="flex flex-col items-center gap-6 py-20">
                         <p className="opacity-30 italic text-center">{t.noTracks}</p>
-                        <button onClick={() => setView('upload')} className="bg-red-600 text-white px-8 py-3 rounded-2xl font-black uppercase italic text-xs shadow-2xl hover:scale-105 transition-transform">First Deployment</button>
+                        <button onClick={() => setView('upload')} className="bg-red-600 text-white px-8 py-3 rounded-2xl font-black uppercase italic text-xs shadow-2xl hover:scale-105 transition-transform">Start V13 Wave</button>
                      </div>
                    ) : (
                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
@@ -375,33 +374,19 @@ const App: React.FC = () => {
           </div>
         )}
 
-        {view === 'moderation' && (
-          <div className="space-y-12">
-            <h2 className="text-6xl font-black uppercase italic tracking-tighter text-red-600">{t.modRoom}</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8">
-              {filteredTracks.map(track => (
-                <TrackCard key={track.id} track={track} isAdmin={canModerate} onStatusChange={async (id, status) => {
-                  await storageService.updateTrackStatus(id, status);
-                  await syncData(true);
-                }} onPlay={handlePlayTrack} />
-              ))}
-            </div>
-          </div>
-        )}
-
         {view === 'upload' && (
           <div className="max-w-xl mx-auto">
-             <div className="app-card p-12 rounded-[50px] shadow-2xl">
+             <div className="app-card p-12 rounded-[50px] shadow-2xl border-2 border-red-600/30">
                 <h2 className="text-4xl font-black uppercase italic text-red-600 mb-10">{t.dropTrack}</h2>
                 <form onSubmit={handleUpload} className="space-y-8">
                    {uploadError && (
-                     <div className="bg-red-600/20 border-2 border-red-600 p-6 rounded-3xl text-red-600 font-bold text-xs uppercase shadow-inner flex items-center gap-3">
+                     <div className="bg-red-600/20 border-2 border-red-600 p-6 rounded-3xl text-red-600 font-bold text-xs uppercase shadow-inner flex items-center gap-3 animate-pulse">
                         <AlertCircle className="w-6 h-6 flex-shrink-0" /> 
                         <span>{uploadError}</span>
                      </div>
                    )}
                    <div onClick={() => trackCoverRef.current?.click()} className="w-64 h-64 mx-auto bg-black/5 border-2 border-dashed border-red-500/20 rounded-[40px] flex items-center justify-center cursor-pointer overflow-hidden relative shadow-inner group transition-all hover:bg-red-600/5">
-                      {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-2 opacity-10"><ImageIcon className="w-12 h-12" /><span className="text-[10px] font-black uppercase">IMAGE BUFFER</span></div>}
+                      {trackCover ? <img src={trackCover} className="w-full h-full object-cover" /> : <div className="flex flex-col items-center gap-2 opacity-10"><ImageIcon className="w-12 h-12" /><span className="text-[10px] font-black uppercase">ARTWORK PACK</span></div>}
                    </div>
                    <input type="file" hidden ref={trackCoverRef} accept="image/*" onChange={e => {
                      const f = e.target.files?.[0];
@@ -412,7 +397,7 @@ const App: React.FC = () => {
                    
                    <div onClick={() => trackAudioRef.current?.click()} className="w-full p-8 bg-white border-2 border-dashed border-red-500/20 rounded-[32px] text-center cursor-pointer font-black uppercase text-sm hover:bg-red-600/5 transition-all flex flex-col items-center gap-2">
                       <Music className="w-8 h-8 opacity-30" /> 
-                      {trackAudio ? <span className="text-green-600">Buffer Locked ✓</span> : t.selectFile}
+                      {trackAudio ? <span className="text-green-600">Payload Locked ✓</span> : t.selectFile}
                    </div>
                    <input type="file" hidden ref={trackAudioRef} accept="audio/*" onChange={e => {
                      const f = e.target.files?.[0];
@@ -421,9 +406,12 @@ const App: React.FC = () => {
                      }
                    }} />
 
-                   <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl disabled:opacity-20 transition-all active:scale-95">
-                      {isUploading ? <><Loader2 className="animate-spin inline-block mr-2" /> {uploadStep}</> : t.sendMod}
-                   </button>
+                   <div className="flex flex-col gap-2">
+                      <button type="submit" disabled={isUploading || !trackCover || !trackAudio || !uploadTitle} className="w-full bg-red-600 text-white py-6 rounded-3xl font-black uppercase text-2xl shadow-2xl disabled:opacity-20 transition-all active:scale-95 flex items-center justify-center gap-4">
+                        {isUploading ? <><Loader2 className="animate-spin" /> {uploadStep}</> : t.sendMod}
+                      </button>
+                      {isUploading && <p className="text-[9px] font-black uppercase text-center text-red-600/60 mt-4 animate-pulse">Protocol V13: Не закрывайте страницу. Идет подтвержденная передача.</p>}
+                   </div>
                 </form>
              </div>
           </div>
@@ -468,7 +456,7 @@ const App: React.FC = () => {
                    <h2 className="text-7xl font-black uppercase italic tracking-tighter text-red-600 mb-4">{auth.user.username}</h2>
                    <div className="flex flex-wrap gap-4 justify-center md:justify-start">
                       <span className="bg-red-600 text-white px-8 py-2 rounded-full font-black text-[10px] uppercase italic">{auth.user.isDeveloper ? t.developer : t.verifiedMusician}</span>
-                      <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">RELAY V12 NODE</span>
+                      <span className="bg-black/5 border border-red-500/20 px-8 py-2 rounded-full font-black text-[10px] uppercase italic">STABLE V13 RELAY</span>
                    </div>
                 </div>
              </div>
